@@ -150,43 +150,45 @@ fn eval_binary(
     env: &Env,
 ) -> Result<Vec<Value>, ExpressionError> {
     let lstream = eval(l, input, env)?;
-    let rstream = eval(r, input, env)?;
 
+    // `and`, `or` and `//` short-circuit: the right side is only evaluated when
+    // necessary (jq semantics, and avoids e.g. division by zero in dead branches).
     match op {
         BinOp::And => {
             let lv = lstream.last().cloned().unwrap_or(Value::Null);
             if !truthy(&lv) {
                 return Ok(vec![Value::Bool(false)]);
             }
-            let rv = rstream.last().cloned().unwrap_or(Value::Null);
-            Ok(vec![Value::Bool(truthy(&rv))])
+            let rv = eval(r, input, env)?.last().cloned().unwrap_or(Value::Null);
+            return Ok(vec![Value::Bool(truthy(&rv))]);
         }
         BinOp::Or => {
             let lv = lstream.last().cloned().unwrap_or(Value::Null);
             if truthy(&lv) {
                 return Ok(vec![Value::Bool(true)]);
             }
-            let rv = rstream.last().cloned().unwrap_or(Value::Null);
-            Ok(vec![Value::Bool(truthy(&rv))])
+            let rv = eval(r, input, env)?.last().cloned().unwrap_or(Value::Null);
+            return Ok(vec![Value::Bool(truthy(&rv))]);
         }
         BinOp::Alternative => {
             let lv = lstream.last().cloned().unwrap_or(Value::Null);
             if !truthy(&lv) {
-                Ok(rstream)
+                return eval(r, input, env);
             } else {
-                Ok(lstream)
+                return Ok(lstream);
             }
         }
-        _ => {
-            let mut out = Vec::new();
-            for lv in &lstream {
-                for rv in &rstream {
-                    out.push(apply_binop(op, lv, rv)?);
-                }
-            }
-            Ok(out)
+        _ => {}
+    }
+
+    let rstream = eval(r, input, env)?;
+    let mut out = Vec::new();
+    for lv in &lstream {
+        for rv in &rstream {
+            out.push(apply_binop(op, lv, rv)?);
         }
     }
+    Ok(out)
 }
 
 fn apply_binop(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExpressionError> {
@@ -207,6 +209,13 @@ fn apply_binop(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExpressionError
 }
 
 fn add(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
+    // `null` is the identity for addition in jq.
+    if matches!(l, Value::Null) {
+        return Ok(r.clone());
+    }
+    if matches!(r, Value::Null) {
+        return Ok(l.clone());
+    }
     match (l, r) {
         (Value::Number(a), Value::Number(b)) => {
             if let (Some(ai), Some(bi)) = (a.as_i64(), b.as_i64()) {
@@ -229,8 +238,6 @@ fn add(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
             out.extend(b.clone());
             Ok(Value::Object(out))
         }
-        (Value::Null, b) => Ok(b.clone()),
-        (a, Value::Null) => Ok(a.clone()),
         _ => Err(ExpressionError::type_error(format!(
             "cannot add `{l}` and `{r}`"
         ))),

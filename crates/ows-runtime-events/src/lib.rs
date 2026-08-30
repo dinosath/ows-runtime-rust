@@ -271,3 +271,94 @@ pub fn values_equal(a: &Value, b: &Value) -> bool {
         _ => a == b,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_runtime_core::EventPublisher;
+    use serde_json::{json, Value};
+
+    #[test]
+    fn cloudevent_builds_and_serializes() {
+        let e = CloudEvent::new("id1", "https://src", "com.example.thing")
+            .with_data(json_data())
+            .with_time("2024-01-01T00:00:00Z");
+        assert_eq!(e.specversion, "1.0");
+        assert_eq!(e.id, "id1");
+        assert_eq!(e.source, "https://src");
+        let v = serde_json::to_value(&e).unwrap();
+        assert_eq!(v["type"], "com.example.thing");
+        assert_eq!(v["specversion"], "1.0");
+    }
+
+    fn json_data() -> Value {
+        serde_json::json!({"foo": "bar"})
+    }
+
+    #[test]
+    fn cloudevent_message_roundtrip() {
+        let e = CloudEvent::new("id", "src", "type").with_data(json_data());
+        let msg = e.to_message();
+        assert_eq!(msg.id, "id");
+        assert_eq!(msg.type_, "type");
+        let back = CloudEvent::from_message(&msg);
+        assert_eq!(back.id, "id");
+        assert_eq!(back.data, Some(json_data()));
+    }
+
+    #[test]
+    fn matcher_type_and_data() {
+        let matcher = EventMatcher {
+            type_: Some("com.example.thing".into()),
+            source: None,
+            subject: None,
+            attributes: vec![("data".into(), FieldConstraint::Equals(json!({"a":1})))],
+        };
+        let ok = CloudEvent::new("1", "src", "com.example.thing").with_data(json!({"a":1}));
+        let bad = CloudEvent::new("2", "src", "com.example.other").with_data(json!({"a":1}));
+        assert!(matcher.matches(&ok));
+        assert!(!matcher.matches(&bad));
+    }
+
+    #[test]
+    fn matcher_regex_constraint() {
+        let matcher = EventMatcher {
+            type_: None,
+            source: None,
+            subject: None,
+            attributes: vec![(
+                "subject".into(),
+                FieldConstraint::MatchesRegex(regex::Regex::new("^p[0-9]+$").unwrap()),
+            )],
+        };
+        let e = CloudEvent::new("1", "src", "t").with_data(Value::Null);
+        let e = CloudEvent {
+            subject: Some("p42".into()),
+            ..e
+        };
+        assert!(matcher.matches(&e));
+    }
+
+    #[test]
+    fn values_equal_numeric() {
+        assert!(values_equal(&json!(1), &json!(1.0)));
+        assert!(values_equal(&json!({"a":[1,2]}), &json!({"a":[1.0,2]})));
+        assert!(!values_equal(&json!({"a":1}), &json!({"a":2})));
+    }
+
+    #[tokio::test]
+    async fn broker_publishes_to_matching_subscriber() {
+        let broker = InMemoryBroker::new();
+        let sub = broker
+            .subscribe(Box::new(|e: &EventMessage| e.type_ == "com.example.thing"))
+            .await
+            .unwrap();
+        let publisher: &dyn EventPublisher = &broker;
+        publisher
+            .publish(&EventMessage::new("1", "src", "com.example.thing"))
+            .await
+            .unwrap();
+        let received = sub.recv().await.expect("should receive event");
+        assert_eq!(received.id, "1");
+    }
+}

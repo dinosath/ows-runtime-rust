@@ -41,6 +41,23 @@ cancellation, retry exhaustion, invalid expressions, missing variables, and
 policy violations. Errors remain typed and structured (`WorkflowError` /
 `ProblemDetails`).
 
+## Coverage
+
+Line coverage of the runtime library crates is measured with
+[`cargo-llvm-cov`](https://github.com/taiki-e/cargo-llvm-cov) and enforced at
+**>= 90%** in CI.
+
+```sh
+./scripts/coverage.sh
+```
+
+The coverage gate covers the runtime library crates (`ows-runtime-core`,
+`ows-runtime-expressions`, `ows-runtime-dsl`, `ows-runtime-events`,
+`ows-runtime-scheduler`, `ows-runtime-observability`, `ows-runtime`). The thin
+CLI wrapper (`ows-runtime-cli`) and the test-support crate
+(`ows-runtime-testing`) are excluded from the gate because they are thin
+wrappers/helpers; they still have their own tests.
+
 ## Determinism
 
 Business logic never calls `Instant::now()`, `Uuid::new_v4()` or `sleep()`

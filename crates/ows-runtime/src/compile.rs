@@ -482,3 +482,340 @@ fn runtime_err(category: &str, msg: String) -> WorkflowError {
             .with_detail(msg),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn compile_yaml(yaml: &str) -> CompiledWorkflow {
+        let def = ows_runtime_dsl::from_yaml(yaml).unwrap();
+        let report = ows_runtime_dsl::validate(&def);
+        assert!(report.is_valid(), "{:?}", report.issues);
+        compile(&def).unwrap()
+    }
+
+    #[test]
+    fn compiles_all_task_kinds() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - set1: { set: { a: 1 } }
+  - do1:
+      do:
+        - inner: { set: { b: 2 } }
+  - for1:
+      for: { each: i, in: '[1,2]' }
+      do:
+        - inner2: { set: { c: $i } }
+  - fork1:
+      fork:
+        compete: false
+        branches:
+          - b1: { set: { x: 1 } }
+  - switch1:
+      switch:
+        - c1: { when: '.a == 1', then: set1 }
+  - try1:
+      try:
+        - inner3: { set: { d: 3 } }
+      catch:
+        errors: { with: { status: 500 } }
+  - raise1:
+      raise:
+        error: { type: https://x/e, status: 400, title: E }
+  - emit1:
+      emit: { event: { with: { type: t } } }
+  - wait1: { wait: { seconds: 1 } }
+  - call1:
+      call: http
+      with: { method: get, endpoint: https://x }
+  - run1:
+      run:
+        workflow: { namespace: a, name: b, version: '1', input: {} }
+"#,
+        );
+        assert_eq!(wf.tasks.len(), 11);
+        assert!(matches!(wf.tasks[0].kind, CompiledTaskKind::Set(_)));
+        assert!(matches!(wf.tasks[1].kind, CompiledTaskKind::Do(_)));
+        assert!(matches!(wf.tasks[2].kind, CompiledTaskKind::For(_)));
+        assert!(matches!(wf.tasks[3].kind, CompiledTaskKind::Fork(_)));
+        assert!(matches!(wf.tasks[4].kind, CompiledTaskKind::Switch(_)));
+        assert!(matches!(wf.tasks[5].kind, CompiledTaskKind::Try(_)));
+        assert!(matches!(wf.tasks[6].kind, CompiledTaskKind::Raise(_)));
+        assert!(matches!(wf.tasks[7].kind, CompiledTaskKind::Emit(_)));
+        assert!(matches!(wf.tasks[8].kind, CompiledTaskKind::Wait(_)));
+        assert!(matches!(wf.tasks[9].kind, CompiledTaskKind::Call(_)));
+        assert!(matches!(wf.tasks[10].kind, CompiledTaskKind::Run(_)));
+        assert_eq!(wf.tasks[0].type_name(), "set");
+    }
+
+    #[test]
+    fn resolves_timeout_reference() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+use:
+  timeouts:
+    slow:
+      after: { seconds: 5 }
+do:
+  - w1:
+      wait: { seconds: 1 }
+      timeout: slow
+"#,
+        );
+        assert_eq!(wf.tasks[0].timeout, Some(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn resolves_eval_mode() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+evaluate:
+  mode: loose
+do:
+  - s1: { set: { a: 1 } }
+"#,
+        );
+        assert!(matches!(wf.evaluate.mode, EvalMode::Loose));
+    }
+
+    #[test]
+    fn workflow_identity_and_schedule() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: ns, name: wf, version: '0.1.0' }
+schedule:
+  every: { seconds: 10 }
+do:
+  - s1: { set: { a: 1 } }
+"#,
+        );
+        assert_eq!(wf.id.namespace, "ns");
+        assert!(wf.schedule.is_some());
+        assert!(matches!(
+            wf.schedule.unwrap().trigger,
+            ows_runtime_core::ScheduleTrigger::Every(_)
+        ));
+    }
+
+    #[test]
+    fn invalid_run_fails() {
+        let def = ows_runtime_dsl::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - bad:
+      run: {}
+"#,
+        )
+        .unwrap();
+        assert!(compile(&def).is_err());
+    }
+
+    #[test]
+    fn compiles_data_flow_transforms() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+input:
+  from: .user
+output:
+  as: .result
+do:
+  - t1:
+      set: { x: 1 }
+      input:
+        from: .a
+        schema: { format: json, document: { type: object } }
+      output:
+        as: .x
+      export:
+        as: '$context + { extra: true }'
+"#,
+        );
+        assert!(wf.input.transform.is_some());
+        assert!(wf.output.transform.is_some());
+        let t = &wf.tasks[0];
+        assert!(t.input.transform.is_some());
+        assert!(t.output.transform.is_some());
+        assert!(t.export.transform.is_some());
+        assert!(t.input.schema.is_some());
+    }
+
+    #[test]
+    fn compiles_retry_policy_reference() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+use:
+  retries:
+    myRetry:
+      delay: { seconds: 2 }
+      backoff:
+        exponential: {}
+      limit:
+        attempt:
+          count: 5
+do:
+  - t1:
+      try:
+        - inner: { set: { x: 1 } }
+      catch:
+        retry: myRetry
+"#,
+        );
+        if let CompiledTaskKind::Try(t) = &wf.tasks[0].kind {
+            let r = t.catch.retry.as_ref().unwrap();
+            assert_eq!(r.attempt_count, Some(5));
+            assert_eq!(r.delay, Some(Duration::from_secs(2)));
+            assert!(matches!(r.backoff, Backoff::Exponential));
+        } else {
+            panic!("expected try task");
+        }
+    }
+
+    #[test]
+    fn compiles_schedule_kinds() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+schedule:
+  cron: '0 0 * * *'
+do:
+  - s: { set: { a: 1 } }
+"#,
+        );
+        assert!(matches!(
+            wf.schedule.unwrap().trigger,
+            ows_runtime_core::ScheduleTrigger::Cron(_)
+        ));
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+schedule:
+  after: { seconds: 5 }
+do:
+  - s: { set: { a: 1 } }
+"#,
+        );
+        assert!(matches!(
+            wf.schedule.unwrap().trigger,
+            ows_runtime_core::ScheduleTrigger::After(_)
+        ));
+    }
+
+    #[test]
+    fn compiles_listen_config() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - l:
+      listen:
+        to:
+          any:
+            - with: { type: a }
+            - with: { type: b }
+        read: envelope
+"#,
+        );
+        if let CompiledTaskKind::Listen(l) = &wf.tasks[0].kind {
+            assert!(matches!(l.to, ListenTo::Any(_)));
+            assert_eq!(l.read.as_deref(), Some("envelope"));
+        } else {
+            panic!("expected listen");
+        }
+    }
+
+    #[test]
+    fn compiles_call_and_raise_reference() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+use:
+  errors:
+    myErr:
+      type: https://x/e
+      title: E
+      status: 400
+do:
+  - c:
+      call: http
+      with: { method: get }
+  - r:
+      raise:
+        error: myErr
+"#,
+        );
+        assert!(matches!(wf.tasks[0].kind, CompiledTaskKind::Call(_)));
+        if let CompiledTaskKind::Raise(r) = &wf.tasks[1].kind {
+            assert!(matches!(r.error, ErrorRef::Reference(_)));
+        }
+    }
+
+    #[test]
+    fn compiles_schedule_on_events() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+schedule:
+  on:
+    one:
+      with: { type: com.example.thing }
+do:
+  - s: { set: { a: 1 } }
+"#,
+        );
+        let trigger = wf.schedule.unwrap().trigger;
+        if let ows_runtime_core::ScheduleTrigger::OnEvents(evts) = trigger {
+            assert_eq!(evts[0].type_, "com.example.thing");
+        } else {
+            panic!("expected on events");
+        }
+    }
+
+    #[test]
+    fn compiles_set_expression_and_listen_one() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - s:
+      set: '${ .x }'
+  - l:
+      listen:
+        to:
+          one:
+            with: { type: t }
+"#,
+        );
+        if let CompiledTaskKind::Set(s) = &wf.tasks[0].kind {
+            assert!(matches!(s.values, SetValues::Expression(_)));
+        } else {
+            panic!("expected set");
+        }
+        if let CompiledTaskKind::Listen(l) = &wf.tasks[1].kind {
+            assert!(matches!(l.to, ListenTo::One(_)));
+        } else {
+            panic!("expected listen");
+        }
+    }
+
+    #[test]
+    fn missing_timeout_reference_errors() {
+        let def = ows_runtime_dsl::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - w1:
+      wait: { seconds: 1 }
+      timeout: nope
+"#,
+        )
+        .unwrap();
+        assert!(compile(&def).is_err());
+    }
+}

@@ -185,3 +185,62 @@ pub mod models {
 mod validate;
 
 pub use validate::{validate, ValidationIssue, ValidationReport};
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const WF: &str = r#"
+document: { dsl: '1.0.3', namespace: ns, name: wf, version: '0.1.0' }
+do:
+  - a: { set: { x: 1 } }
+"#;
+
+    #[test]
+    fn parse_yaml_and_json_and_identity() {
+        let def = from_yaml(WF).unwrap();
+        assert_eq!(workflow_id(&def).qualified_name(), "wf.ns");
+        assert_eq!(workflow_id(&def).key(), "ns/wf/0.1.0");
+        let json = to_json(&def).unwrap();
+        let from_json = from_json(&json).unwrap();
+        assert_eq!(from_json.document.name, "wf");
+    }
+
+    #[test]
+    fn to_yaml_roundtrips() {
+        let def = from_yaml(WF).unwrap();
+        let yaml = to_yaml(&def).unwrap();
+        let again = from_yaml(&yaml).unwrap();
+        assert_eq!(again.do_.entries.len(), 1);
+    }
+
+    #[test]
+    fn parse_errors_are_classified() {
+        assert!(from_yaml("do: [").unwrap_err().is_parse());
+        assert!(from_json("{").unwrap_err().is_parse());
+    }
+
+    #[test]
+    fn normalize_injects_compete() {
+        let mut v: serde_json::Value = serde_yaml::from_str(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - f:
+      fork:
+        branches:
+          - a: { set: { x: 1 } }
+"#,
+        )
+        .unwrap();
+        normalize_definition(&mut v);
+        let fork = &v["do"][0]["f"]["fork"];
+        assert_eq!(fork["compete"], serde_json::Value::Bool(false));
+    }
+
+    #[test]
+    fn from_bytes_parses() {
+        let def = from_bytes(WF.as_bytes()).unwrap();
+        assert_eq!(def.document.name, "wf");
+    }
+}

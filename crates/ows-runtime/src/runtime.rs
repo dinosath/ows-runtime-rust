@@ -455,3 +455,113 @@ impl Default for RuntimeBuilder {
 // Re-export the HTTP invoker type for users who want to inspect it.
 #[cfg(feature = "http")]
 pub use crate::service::HttpServiceInvoker as _HttpServiceInvokerExport;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_runtime_core::{DeterministicClock, SeededRandomGenerator};
+
+    #[test]
+    fn builder_defaults_and_overrides() {
+        let rt = Runtime::builder().build().unwrap();
+        assert!(!rt.inner.runtime_info.name.is_empty());
+
+        let rt = Runtime::builder()
+            .with_clock(Arc::new(DeterministicClock::new()))
+            .with_random(Arc::new(SeededRandomGenerator::new(1)))
+            .with_runtime_info(RuntimeInfo {
+                name: "test".into(),
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        assert_eq!(rt.inner.runtime_info.name, "test");
+        assert!(rt.inner.clock.is_deterministic());
+    }
+
+    #[tokio::test]
+    async fn register_and_run_definition() {
+        let rt = Runtime::builder().build().unwrap();
+        let def = ows_runtime_dsl::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: n, name: w, version: '1.0.0' }
+do:
+  - a: { set: { x: 1 } }
+"#,
+        )
+        .unwrap();
+        let wf = rt.register_definition(&def).unwrap();
+        let out = rt.run(wf, serde_json::Value::Null).await.unwrap();
+        assert_eq!(out["x"], 1);
+    }
+
+    #[test]
+    fn builder_register_function_and_policy() {
+        let b = Runtime::builder();
+        let b = b.with_policy(ows_runtime_core::RuntimePolicy {
+            allow_network: true,
+            ..Default::default()
+        });
+        assert!(!b.policy.allow_network || b.policy.allow_network);
+    }
+
+    #[test]
+    fn runtime_inner_workflow_lookup() {
+        let rt = Runtime::builder().build().unwrap();
+        let def = ows_runtime_dsl::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: n, name: w, version: '1.0.0' }
+do:
+  - a: { set: { x: 1 } }
+"#,
+        )
+        .unwrap();
+        let wf = rt.register_definition(&def).unwrap();
+        let key = format!("{}/{}/{}", wf.id.namespace, wf.id.name, wf.id.version);
+        assert!(rt.inner.workflow(&key).is_some());
+        assert!(rt.inner.workflow("nope").is_none());
+    }
+
+    #[test]
+    fn cancellation_token_behavior() {
+        let c = Cancellation::new();
+        assert!(!c.is_cancelled());
+        c.cancel();
+        assert!(c.is_cancelled());
+    }
+
+    #[tokio::test]
+    async fn cancellation_notifies() {
+        let c = Arc::new(Cancellation::new());
+        let c2 = c.clone();
+        let handle = tokio::spawn(async move {
+            tokio::select! {
+                _ = c2.notified() => true,
+                _ = tokio::time::sleep(std::time::Duration::from_secs(10)) => false,
+            }
+        });
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        c.cancel();
+        assert!(handle.await.unwrap());
+    }
+
+    #[test]
+    fn builder_all_with_methods() {
+        use ows_runtime_core::{
+            DefaultUuidGenerator, NoopEventConsumer, NullEventPublisher, RuntimePolicy,
+        };
+        let rt = Runtime::builder()
+            .with_expression(Arc::new(ows_runtime_expressions::JqEngine::new()))
+            .with_uuid(Arc::new(DefaultUuidGenerator))
+            .with_event_publisher(Arc::new(NullEventPublisher))
+            .with_event_consumer(Arc::new(NoopEventConsumer))
+            .with_service(Arc::new(NoopServiceInvoker))
+            .with_process(Arc::new(NoopProcessRunner))
+            .with_store(Arc::new(InMemoryExecutionStore::new()))
+            .with_scheduler(Arc::new(ows_runtime_scheduler::NoopScheduler))
+            .with_policy(RuntimePolicy::default())
+            .build()
+            .unwrap();
+        assert!(rt.inner.functions.read().unwrap().contains_key("http"));
+    }
+}

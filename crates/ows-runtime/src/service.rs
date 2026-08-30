@@ -654,3 +654,203 @@ fn enforce_network_policy(inner: &Arc<RuntimeInner>, uri: &str) -> Result<(), Wo
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_runtime_core::{ExpressionContext, RuntimePolicy};
+
+    #[test]
+    fn expand_uri_template_resolves_input() {
+        let wf = json!({"input": {"petId": 7}});
+        assert_eq!(
+            expand_uri_template("https://x/pet/{petId}", &wf),
+            "https://x/pet/7"
+        );
+        assert_eq!(
+            expand_uri_template("https://x/no/{missing}", &wf),
+            "https://x/no/{missing}"
+        );
+    }
+
+    #[test]
+    fn deserialize_body_json_and_text() {
+        let json = deserialize_body(b"{\"a\":1}", "application/json");
+        assert_eq!(json, Some(json!({"a":1})));
+        let text = deserialize_body(b"hello", "text/plain");
+        assert_eq!(text, Some(json!("hello")));
+    }
+
+    #[test]
+    fn is_json_content_type_check() {
+        let mut h = HashMap::new();
+        h.insert("content-type".to_string(), "application/json".to_string());
+        assert!(is_json_content_type(&h));
+        let mut h2 = HashMap::new();
+        h2.insert("content-type".to_string(), "text/plain".to_string());
+        assert!(!is_json_content_type(&h2));
+    }
+
+    #[test]
+    fn find_operation_resolves() {
+        let spec = json!({
+            "paths": {
+                "/pet/{id}": {
+                    "get": { "operationId": "getPet" },
+                    "post": { "operationId": "addPet" }
+                }
+            }
+        });
+        assert_eq!(
+            find_operation(&spec, "getPet"),
+            Some(("get".into(), "/pet/{id}".into()))
+        );
+        assert_eq!(
+            find_operation(&spec, "addPet"),
+            Some(("post".into(), "/pet/{id}".into()))
+        );
+        assert_eq!(find_operation(&spec, "missing"), None);
+    }
+
+    #[test]
+    fn interpolate_params_strings() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        let ctx = ExpressionContext {
+            input: json!({"status": "available"}),
+            ..Default::default()
+        };
+        let mut params = Map::new();
+        params.insert("status".to_string(), json!("${ .status }"));
+        let out = interpolate_params(&inner, &params, &ctx).unwrap();
+        assert_eq!(out["status"], json!("available"));
+        params.insert("n".to_string(), json!(42));
+        let out = interpolate_params(&inner, &params, &ctx).unwrap();
+        assert_eq!(out["n"], json!(42));
+    }
+
+    #[test]
+    fn network_policy_deny_by_default() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        let err = enforce_network_policy(&inner, "https://example.com").unwrap_err();
+        assert_eq!(err.kind, ows_runtime_core::ErrorKind::Policy);
+    }
+
+    #[test]
+    fn network_policy_allows_when_enabled() {
+        let rt = crate::Runtime::builder()
+            .with_policy(RuntimePolicy {
+                allow_network: true,
+                ..Default::default()
+            })
+            .build()
+            .unwrap();
+        enforce_network_policy(&rt.inner, "https://example.com").unwrap();
+    }
+
+    #[test]
+    fn apply_auth_basic_and_bearer() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        let ctx = ExpressionContext {
+            input: json!({"u":"user","p":"pass"}),
+            ..Default::default()
+        };
+        let mut headers = HashMap::new();
+        apply_auth(
+            Some(json!({"basic": {"username": "${ .u }", "password": "${ .p }"}})),
+            &mut headers,
+            &ctx,
+            &inner,
+        )
+        .unwrap();
+        assert!(headers["authorization"].starts_with("Basic "));
+        let mut headers = HashMap::new();
+        apply_auth(
+            Some(json!({"bearer": {"token": "tok"}})),
+            &mut headers,
+            &ctx,
+            &inner,
+        )
+        .unwrap();
+        assert_eq!(headers["authorization"], "Bearer tok");
+    }
+
+    #[test]
+    fn resolve_endpoint_uri_and_auth() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        let ctx = ExpressionContext {
+            input: json!({}),
+            workflow: Some(json!({"input": {"id": 5}})),
+            ..Default::default()
+        };
+        // String endpoint.
+        let (uri, auth) = resolve_endpoint(&json!("https://x/{id}"), &ctx, &inner).unwrap();
+        assert_eq!(uri, "https://x/5");
+        assert!(auth.is_none());
+        // Object endpoint with uri + authentication.
+        let obj = json!({"uri": "https://x/y", "authentication": {"basic": {"username":"u","password":"p"}}});
+        let (uri, auth) = resolve_endpoint(&obj, &ctx, &inner).unwrap();
+        assert_eq!(uri, "https://x/y");
+        assert!(auth.is_some());
+    }
+
+    #[test]
+    fn resolve_headers_query_body() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        let ctx = ExpressionContext {
+            input: json!({"name":"Bob"}),
+            ..Default::default()
+        };
+        let headers =
+            resolve_headers(Some(&json!({"X-Name": "${ .name }"})), &ctx, &inner).unwrap();
+        assert_eq!(headers["X-Name"], "Bob");
+        let q = resolve_query(Some(&json!({"q": "${ .name }"})), &ctx, &inner).unwrap();
+        assert_eq!(q.unwrap()[0], ("q".to_string(), "Bob".to_string()));
+        let body = resolve_body(
+            Some(&json!({"greeting": "${ \"Hi \" + .name }"})),
+            &ctx,
+            &inner,
+        )
+        .unwrap();
+        assert_eq!(body.unwrap(), json!({"greeting": "Hi Bob"}));
+    }
+
+    #[test]
+    fn resolve_optional_str_and_missing() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        let ctx = ExpressionContext {
+            input: json!({"u":"u1"}),
+            ..Default::default()
+        };
+        let s = resolve_optional_str(Some(&json!("${ .u }")), &ctx, &inner).unwrap();
+        assert_eq!(s, "u1");
+        let s = resolve_optional_str(None, &ctx, &inner).unwrap();
+        assert_eq!(s, "");
+    }
+
+    #[test]
+    fn resolve_endpoint_invalid_type_errors() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        let ctx = ExpressionContext::default();
+        assert!(resolve_endpoint(&json!(42), &ctx, &inner).is_err());
+    }
+
+    #[test]
+    fn is_json_content_type_missing_header() {
+        let h: HashMap<String, String> = HashMap::new();
+        assert!(!is_json_content_type(&h));
+    }
+
+    #[test]
+    fn enforce_network_policy_invalid_uri() {
+        let rt = crate::Runtime::builder().build().unwrap();
+        let inner = rt.inner.clone();
+        assert!(enforce_network_policy(&inner, "not a url").is_err());
+    }
+}

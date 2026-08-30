@@ -69,3 +69,31 @@ pub fn policy_error(detail: impl Into<String>) -> WorkflowError {
         ProblemDetails::standard(StandardErrorType::Runtime).with_detail(detail),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_runtime_core::ErrorKind;
+
+    #[test]
+    fn definition_error_mapping() {
+        let e = ows_runtime_dsl::DefinitionError::Parse("bad".into());
+        let w = from_definition_error(&e);
+        assert_eq!(w.kind, ErrorKind::Parse);
+        let e = ows_runtime_dsl::DefinitionError::Semantic("bad".into());
+        assert_eq!(from_definition_error(&e).kind, ErrorKind::Semantic);
+        let e = ows_runtime_dsl::DefinitionError::Schema("bad".into());
+        assert_eq!(from_definition_error(&e).kind, ErrorKind::Schema);
+    }
+
+    #[test]
+    fn typed_error_constructors() {
+        assert_eq!(runtime_error("x").kind, ErrorKind::Runtime);
+        assert_eq!(semantic_error("x").kind, ErrorKind::Semantic);
+        assert_eq!(expression_error("x").kind, ErrorKind::Expression);
+        assert_eq!(validation_error("x").kind, ErrorKind::Schema);
+        assert_eq!(policy_error("x").kind, ErrorKind::Policy);
+        assert_eq!(communication_error(503, "down").problem.status, 503);
+        assert_eq!(timeout_error().problem.status, 408);
+    }
+}

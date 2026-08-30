@@ -579,3 +579,93 @@ pub fn scope_entries(map: &Map<String, TaskDefinition>) -> Vec<(String, TaskDefi
         })
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_iso8601_durations() {
+        assert_eq!(
+            parse_iso8601_duration("PT30S").unwrap(),
+            Duration::from_secs(30)
+        );
+        assert_eq!(
+            parse_iso8601_duration("PT1M").unwrap(),
+            Duration::from_secs(60)
+        );
+        assert_eq!(
+            parse_iso8601_duration("PT1H30M").unwrap(),
+            Duration::from_secs(90 * 60)
+        );
+        assert_eq!(
+            parse_iso8601_duration("P1D").unwrap(),
+            Duration::from_secs(24 * 3600)
+        );
+        assert_eq!(
+            parse_iso8601_duration("P1DT2H").unwrap(),
+            Duration::from_secs(26 * 3600)
+        );
+        assert_eq!(
+            parse_iso8601_duration("PT0.5S").unwrap(),
+            Duration::from_millis(500)
+        );
+        assert!(parse_iso8601_duration("not-a-duration").is_err());
+        assert!(parse_iso8601_duration("PX").is_err());
+    }
+
+    #[test]
+    fn resolve_duration_values() {
+        let iso = OneOfDurationOrIso8601Expression::Iso8601Expression("PT10S".into());
+        assert_eq!(
+            resolve_duration(&iso).unwrap().unwrap(),
+            Duration::from_secs(10)
+        );
+        let dur = OneOfDurationOrIso8601Expression::Duration(dsl_models::Duration::from_seconds(5));
+        assert_eq!(
+            resolve_duration(&dur).unwrap().unwrap(),
+            Duration::from_secs(5)
+        );
+    }
+
+    #[test]
+    fn scope_entries_preserves_order() {
+        use serverless_workflow_core::models::map::Map;
+        let mut m = Map::new();
+        m.add("b".to_string(), TaskDefinition::Set(Default::default()));
+        m.add("a".to_string(), TaskDefinition::Set(Default::default()));
+        let entries = scope_entries(&m);
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].0, "b");
+        assert_eq!(entries[1].0, "a");
+    }
+
+    #[test]
+    fn task_type_names() {
+        let set = CompiledTaskKind::Set(SetDef {
+            values: SetValues::Map(vec![]),
+        });
+        assert_eq!(set.type_name(), "set");
+        assert_eq!(CompiledTaskKind::Do(vec![]).type_name(), "do");
+        assert_eq!(
+            CompiledTaskKind::Wait(WaitDef {
+                duration: Duration::ZERO
+            })
+            .type_name(),
+            "wait"
+        );
+        assert_eq!(
+            CompiledTaskKind::Raise(RaiseDef {
+                error: ErrorRef::Reference("e".into())
+            })
+            .type_name(),
+            "raise"
+        );
+    }
+
+    #[test]
+    fn eval_mode_defaults() {
+        assert_eq!(EvalConfig::default().language, "jq");
+        assert!(matches!(EvalConfig::default().mode, EvalMode::Strict));
+    }
+}

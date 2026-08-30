@@ -307,3 +307,110 @@ impl LifecycleEmitter {
         .await
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_runtime_core::EventMessage;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct Recorder(Arc<Mutex<Vec<EventMessage>>>);
+    #[async_trait::async_trait]
+    impl ows_runtime_core::EventPublisher for Recorder {
+        async fn publish(&self, e: &EventMessage) -> Result<(), ows_runtime_core::WorkflowError> {
+            self.0.lock().unwrap().push(e.clone());
+            Ok(())
+        }
+    }
+
+    fn wf() -> WorkflowRef {
+        WorkflowRef {
+            namespace: "ns".into(),
+            name: "wf".into(),
+            version: "1.0.0".into(),
+        }
+    }
+
+    #[tokio::test]
+    async fn workflow_started_event() {
+        let r = Recorder::default();
+        let em = LifecycleEmitter::new(Arc::new(r.clone()));
+        em.workflow_started(&wf(), "exec", "2024-01-01T00:00:00Z")
+            .await
+            .unwrap();
+        let events = r.0.lock().unwrap().clone();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].type_, event_types::WORKFLOW_STARTED);
+        assert_eq!(events[0].source, "/ns/wf/1.0.0");
+        let data = serde_json::to_value(&events[0].data).unwrap();
+        assert_eq!(data["name"], "wf-1.0.0.ns");
+    }
+
+    #[tokio::test]
+    async fn workflow_completed_event() {
+        let r = Recorder::default();
+        let em = LifecycleEmitter::new(Arc::new(r.clone()));
+        em.workflow_completed(&wf(), "exec", "2024-01-01T00:00:00Z")
+            .await
+            .unwrap();
+        assert_eq!(
+            r.0.lock().unwrap()[0].type_,
+            event_types::WORKFLOW_COMPLETED
+        );
+    }
+
+    #[tokio::test]
+    async fn workflow_faulted_event() {
+        let r = Recorder::default();
+        let em = LifecycleEmitter::new(Arc::new(r.clone()));
+        em.workflow_faulted(
+            &wf(),
+            "exec",
+            "2024-01-01T00:00:00Z",
+            &serde_json::json!({"type":"x"}),
+        )
+        .await
+        .unwrap();
+        let e = &r.0.lock().unwrap()[0];
+        assert_eq!(e.type_, event_types::WORKFLOW_FAULTED);
+        let data = serde_json::to_value(&e.data).unwrap();
+        assert_eq!(data["error"]["type"], "x");
+    }
+
+    #[tokio::test]
+    async fn workflow_cancelled_and_status_changed() {
+        let r = Recorder::default();
+        let em = LifecycleEmitter::new(Arc::new(r.clone()));
+        em.workflow_cancelled(&wf(), "exec", "t").await.unwrap();
+        em.workflow_status_changed(&wf(), "exec", "running", "completed", "t")
+            .await
+            .unwrap();
+        let ev = r.0.lock().unwrap();
+        assert_eq!(ev[0].type_, event_types::WORKFLOW_CANCELLED);
+        assert_eq!(ev[1].type_, event_types::WORKFLOW_STATUS_CHANGED);
+    }
+
+    #[tokio::test]
+    async fn task_lifecycle_events() {
+        let r = Recorder::default();
+        let em = LifecycleEmitter::new(Arc::new(r.clone()));
+        em.task_started(&wf(), "exec", "t1", "task1", "t")
+            .await
+            .unwrap();
+        em.task_completed(&wf(), "exec", "t1", "task1", "t")
+            .await
+            .unwrap();
+        em.task_retried(&wf(), "exec", "t1", "task1", 2, "t")
+            .await
+            .unwrap();
+        em.task_faulted(&wf(), "exec", "t1", "task1", "t", &serde_json::json!({}))
+            .await
+            .unwrap();
+        let ev = r.0.lock().unwrap();
+        assert_eq!(ev[0].type_, event_types::TASK_STARTED);
+        assert_eq!(ev[1].type_, event_types::TASK_COMPLETED);
+        assert_eq!(ev[2].type_, event_types::TASK_RETRIED);
+        assert_eq!(ev[3].type_, event_types::TASK_FAULTED);
+    }
+}

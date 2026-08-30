@@ -460,3 +460,168 @@ impl<'a> Lexer<'a> {
         Ok(self.chars[start..self.pos - 1].iter().collect())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn toks(src: &str) -> Vec<Token> {
+        Lexer::new(src).tokenize().unwrap()
+    }
+
+    #[test]
+    fn basic_tokens() {
+        let t = toks(".foo + 1");
+        assert!(matches!(t[0], Token::Dot));
+        assert!(matches!(t[1], Token::Ident(ref s) if s == "foo"));
+        assert!(matches!(t[2], Token::Plus));
+        assert!(matches!(t[3], Token::Number(1.0)));
+        assert!(matches!(t[4], Token::Eof));
+    }
+
+    #[test]
+    fn variables_numbers_and_strings() {
+        let t = toks("$x \"hi\" 3.5");
+        assert!(matches!(t[0], Token::Variable(ref s) if s == "x"));
+        assert!(matches!(t[1], Token::Str(ref s) if s == "hi"));
+        assert!(matches!(t[2], Token::Number(3.5)));
+    }
+
+    #[test]
+    fn multi_char_operators() {
+        let t = toks("== != <= >= //");
+        assert!(matches!(t[0], Token::EqEq));
+        assert!(matches!(t[1], Token::Ne));
+        assert!(matches!(t[2], Token::Le));
+        assert!(matches!(t[3], Token::Ge));
+        assert!(matches!(t[4], Token::Alternative));
+    }
+
+    #[test]
+    fn string_with_interpolation() {
+        let t = toks(r#""a \(.b) c""#);
+        assert!(matches!(t[0], Token::Str(ref s) if s == "a "));
+        assert!(matches!(t[1], Token::Interp(ref s) if s == ".b"));
+        assert!(matches!(t[2], Token::Str(ref s) if s == " c"));
+    }
+
+    #[test]
+    fn comments_and_whitespace() {
+        let t = toks("1 # comment\n 2");
+        assert!(matches!(t[0], Token::Number(1.0)));
+        assert!(matches!(t[1], Token::Number(2.0)));
+    }
+
+    #[test]
+    fn lex_errors() {
+        assert!(Lexer::new("\"unterminated").tokenize().is_err());
+        assert!(Lexer::new("`").tokenize().is_err());
+    }
+
+    #[test]
+    fn structural_tokens() {
+        let t = toks("{ } ( ) | , : ; ..");
+        assert!(matches!(t[0], Token::LBrace));
+        assert!(matches!(t[1], Token::RBrace));
+        assert!(matches!(t[2], Token::LParen));
+        assert!(matches!(t[3], Token::RParen));
+        assert!(matches!(t[4], Token::Pipe));
+        assert!(matches!(t[5], Token::Comma));
+        assert!(matches!(t[6], Token::Colon));
+        assert!(matches!(t[7], Token::Semicolon));
+        assert!(matches!(t[8], Token::RecursiveDot));
+    }
+
+    #[test]
+    fn describe_is_informative() {
+        assert_eq!(Token::Pipe.describe(), "|");
+        assert_eq!(Token::Eof.describe(), "end of input");
+        assert!(Token::Ident("foo".into()).describe() == "foo");
+    }
+
+    #[test]
+    fn number_exponent_and_negative() {
+        let t = toks("1e3 -2.5");
+        assert!(matches!(t[0], Token::Number(n) if n == 1000.0));
+        assert!(matches!(t[1], Token::Minus));
+        assert!(matches!(t[2], Token::Number(n) if n == 2.5));
+    }
+
+    #[test]
+    fn quoted_string_token() {
+        let t = toks("\"hello\"");
+        assert!(matches!(t[0], Token::Str(ref s) if s == "hello"));
+    }
+
+    #[test]
+    fn all_describe_arms() {
+        for t in [
+            Token::Dot,
+            Token::RecursiveDot,
+            Token::LBracket,
+            Token::RBracket,
+            Token::LBrace,
+            Token::RBrace,
+            Token::LParen,
+            Token::RParen,
+            Token::Comma,
+            Token::Colon,
+            Token::Semicolon,
+            Token::EqEq,
+            Token::Ne,
+            Token::Lt,
+            Token::Le,
+            Token::Gt,
+            Token::Ge,
+            Token::Plus,
+            Token::Minus,
+            Token::Star,
+            Token::Slash,
+            Token::Percent,
+            Token::Alternative,
+            Token::Assign,
+            Token::Eof,
+            Token::Variable("v".into()),
+            Token::Number(1.0),
+            Token::Str("s".into()),
+            Token::Interp("i".into()),
+            Token::Ident("id".into()),
+        ] {
+            assert!(!t.describe().is_empty());
+        }
+    }
+
+    #[test]
+    fn string_escape_arms() {
+        // tab, carriage return, form feed, backspace, forward slash, unicode.
+        let t = toks(r#""a	b""#);
+        if let Token::Str(ref s) = t[0] {
+            assert!(s.contains('\t'));
+        } else {
+            panic!();
+        }
+        let t = toks(
+            r#""a
+b""#,
+        );
+        if let Token::Str(ref s) = t[0] {
+            assert!(s.contains('\n'));
+        } else {
+            panic!();
+        }
+        let t = toks(r#""a\/b""#);
+        if let Token::Str(ref s) = t[0] {
+            assert!(s.contains('/'));
+        } else {
+            panic!();
+        }
+        let t = toks(r#""\u00e9""#);
+        if let Token::Str(ref s) = t[0] {
+            assert_eq!(s, "\u{e9}");
+        } else {
+            panic!();
+        }
+        // invalid unicode escape errors
+        assert!(Lexer::new(r#""\uZZZZ""#).tokenize().is_err());
+    }
+}

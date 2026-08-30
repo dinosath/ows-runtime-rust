@@ -147,3 +147,25 @@ mod tests {
         assert!(clock.is_deterministic());
     }
 }
+
+#[cfg(test)]
+mod clock_more_tests {
+    use super::*;
+
+    #[test]
+    fn system_clock_basics() {
+        let c = SystemClock::new();
+        assert!(!c.is_deterministic());
+        assert!(c.epoch_seconds() > 1_600_000_000);
+        let now = c.now();
+        let later = c.now();
+        assert!(later >= now);
+    }
+
+    #[test]
+    fn deterministic_clock_defaults() {
+        let c = DeterministicClock::default();
+        assert_eq!(c.epoch_seconds(), 0);
+        assert!(c.is_deterministic());
+    }
+}

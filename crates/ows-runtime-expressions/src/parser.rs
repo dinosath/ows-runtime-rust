@@ -256,7 +256,7 @@ impl Parser {
             Token::LBrace => self.parse_object(),
             Token::LParen => {
                 self.advance();
-                let e = self.parse_pipe()?;
+                let e = self.parse_expr()?;
                 self.expect(&Token::RParen, "`)`")?;
                 Ok(e)
             }
@@ -288,7 +288,8 @@ impl Parser {
             }
             "if" => self.parse_if(),
             _ => {
-                // Function call: ident "(" args ")".
+                // Function call: ident "(" args ")", or a bare zero-argument
+                // builtin such as `length`, `keys`, `type`.
                 if matches!(self.peek2(), Token::LParen) {
                     self.advance();
                     self.advance();
@@ -296,10 +297,8 @@ impl Parser {
                     self.expect(&Token::RParen, "`)`")?;
                     Ok(Expr::Call(ident, args))
                 } else {
-                    Err(ExpressionError::parse(
-                        self.pos,
-                        format!("unknown identifier `{ident}`"),
-                    ))
+                    self.advance();
+                    Ok(Expr::Call(ident, Vec::new()))
                 }
             }
         }
@@ -370,7 +369,8 @@ impl Parser {
         }
         loop {
             args.push(self.parse_pipe()?);
-            if matches!(self.peek(), Token::Comma) {
+            // jq uses `;` to separate function arguments (e.g. `range(0;3)`).
+            if matches!(self.peek(), Token::Comma | Token::Semicolon) {
                 self.advance();
             } else {
                 break;

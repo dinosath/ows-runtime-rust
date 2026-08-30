@@ -54,3 +54,28 @@ impl From<ExpressionError> for ows_runtime_core::ExpressionError {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn constructors() {
+        let p = ExpressionError::parse(3, "bad");
+        assert!(matches!(p, ExpressionError::Parse { pos: 3, .. }));
+        let e = ExpressionError::eval("boom");
+        assert!(matches!(e, ExpressionError::Eval { .. }));
+        let t = ExpressionError::type_error("type");
+        assert!(matches!(t, ExpressionError::TypeError { .. }));
+        let u = ExpressionError::UnsupportedFunction { name: "f".into() };
+        assert!(matches!(u, ExpressionError::UnsupportedFunction { .. }));
+    }
+
+    #[test]
+    fn display_and_conversion() {
+        let e = ExpressionError::parse(0, "bad");
+        assert!(e.to_string().contains("parse error"));
+        let core: ows_runtime_core::ExpressionError = e.into();
+        assert!(!core.message.is_empty());
+    }
+}

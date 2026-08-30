@@ -912,3 +912,321 @@ fn read_event(event: &EventMessage, read: &str) -> Value {
         _ => event.data.clone().unwrap_or(Value::Null),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use ows_runtime_core::ExpressionContext;
+    use serde_json::json;
+
+    fn inner() -> Arc<RuntimeInner> {
+        crate::Runtime::builder().build().unwrap().inner
+    }
+
+    fn retry_policy(
+        when: Option<&str>,
+        except: Option<&str>,
+        delay: Option<Duration>,
+        backoff: Backoff,
+    ) -> RetryPolicyDef {
+        RetryPolicyDef {
+            when: when.map(String::from),
+            except_when: except.map(String::from),
+            delay,
+            backoff,
+            jitter: None,
+            attempt_count: None,
+            attempt_duration: None,
+            retry_duration: None,
+        }
+    }
+
+    #[test]
+    fn process_output_selection() {
+        let r = ows_runtime_core::ProcessResult {
+            code: Some(3),
+            stdout: Some("out".into()),
+            stderr: Some("err".into()),
+        };
+        assert_eq!(process_output(&r, RunReturn::Stdout), json!("out"));
+        assert_eq!(process_output(&r, RunReturn::Stderr), json!("err"));
+        assert_eq!(process_output(&r, RunReturn::Code), json!(3));
+        assert_eq!(process_output(&r, RunReturn::None), Value::Null);
+        let all = process_output(&r, RunReturn::All);
+        assert_eq!(all["code"], json!(3));
+    }
+
+    #[test]
+    fn read_event_modes() {
+        let mut msg = ows_runtime_core::EventMessage::new("1", "src", "t");
+        msg.data = Some(json!({"a":1}));
+        assert_eq!(read_event(&msg, "data"), json!({"a":1}));
+        assert_eq!(read_event(&msg, "raw"), json!({"a":1}));
+        let env = read_event(&msg, "envelope");
+        assert_eq!(env["type"], "t");
+    }
+
+    #[test]
+    fn values_equal_semantics() {
+        assert!(values_equal(&json!(1), &json!(1.0)));
+        assert!(!values_equal(&json!([1]), &json!([2])));
+        assert!(!values_equal(&json!({"a":1}), &json!({"b":1})));
+    }
+
+    #[test]
+    fn compute_delay_backoff() {
+        let inner = inner();
+        let base = retry_policy(None, None, Some(Duration::from_secs(1)), Backoff::Constant);
+        assert_eq!(compute_delay(&inner, &base, 1), Duration::from_secs(1));
+        let lin = retry_policy(None, None, Some(Duration::from_secs(1)), Backoff::Linear);
+        assert_eq!(compute_delay(&inner, &lin, 3), Duration::from_secs(3));
+        let exp = retry_policy(
+            None,
+            None,
+            Some(Duration::from_secs(1)),
+            Backoff::Exponential,
+        );
+        assert_eq!(compute_delay(&inner, &exp, 3), Duration::from_secs(4));
+    }
+
+    #[test]
+    fn deep_interpolate_nested() {
+        let inner = inner();
+        let ctx = ExpressionContext {
+            input: json!({"name":"Bob"}),
+            ..Default::default()
+        };
+        let v = json!({"greeting": "${ .name }", "list": ["${ .name }", 3]});
+        let out = deep_interpolate(&inner, &v, &ctx).unwrap();
+        assert_eq!(out, json!({"greeting":"Bob","list":["Bob",3]}));
+    }
+
+    #[test]
+    fn build_matcher_type_and_data() {
+        let filter = EventFilterDef {
+            with: [
+                ("type".to_string(), json!("t")),
+                ("data".to_string(), json!({"a":1})),
+            ]
+            .into_iter()
+            .collect(),
+            correlate: vec![],
+        };
+        let m = build_matcher_filter(&filter);
+        assert_eq!(m.type_.as_deref(), Some("t"));
+        assert!(!m.attributes.is_empty());
+    }
+
+    fn build_matcher_filter(f: &EventFilterDef) -> ows_runtime_events::EventMatcher {
+        // build_matcher needs inner + ctx; use a runtime.
+        let rt = crate::Runtime::builder().build().unwrap();
+        let ctx = ExpressionContext::default();
+        build_matcher(&rt.inner, f, &ctx).unwrap()
+    }
+
+    #[test]
+    fn retryable_when_and_except() {
+        let inner = inner();
+        let err = WorkflowError::new(
+            ows_runtime_core::ErrorKind::Runtime,
+            ows_runtime_core::ProblemDetails::standard(
+                ows_runtime_core::StandardErrorType::Runtime,
+            ),
+        );
+        let ctx = ExpressionContext::default();
+        let ec = crate::engine::ExecContext {
+            inner: inner.clone(),
+            execution_id: "e".into(),
+            context: Arc::new(tokio::sync::Mutex::new(Value::Null)),
+            secrets: Default::default(),
+            workflow_descriptor: Value::Null,
+            runtime_descriptor: Value::Null,
+            ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            timeout: None,
+            cancel: Arc::new(crate::runtime::Cancellation::new()),
+            loop_vars: Default::default(),
+        };
+        let retry = retry_policy(Some("true"), None, None, Backoff::Constant);
+        assert!(retryable(&inner, &retry, &err, &ctx, &ec).unwrap());
+        let retry = retry_policy(None, Some("true"), None, Backoff::Constant);
+        assert!(!retryable(&inner, &retry, &err, &ctx, &ec).unwrap());
+    }
+
+    #[test]
+    fn catch_matches_filters() {
+        let inner = inner();
+        let err = WorkflowError::new(
+            ows_runtime_core::ErrorKind::Runtime,
+            ows_runtime_core::ProblemDetails::standard(
+                ows_runtime_core::StandardErrorType::Communication,
+            )
+            .with_detail("d"),
+        );
+        let ctx = ExpressionContext::default();
+        let ec = crate::engine::ExecContext {
+            inner: inner.clone(),
+            execution_id: "e".into(),
+            context: Arc::new(tokio::sync::Mutex::new(Value::Null)),
+            secrets: Default::default(),
+            workflow_descriptor: Value::Null,
+            runtime_descriptor: Value::Null,
+            ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            timeout: None,
+            cancel: Arc::new(crate::runtime::Cancellation::new()),
+            loop_vars: Default::default(),
+        };
+        let catch = CatchDef {
+            filter: Some([("status".to_string(), json!(500))].into_iter().collect()),
+            as_: None,
+            when: None,
+            except_when: None,
+            retry: None,
+            do_: None,
+            then: None,
+        };
+        assert!(catch_matches(&inner, &catch, &err, &ctx, &ec).unwrap());
+        let catch2 = CatchDef {
+            filter: Some([("status".to_string(), json!(404))].into_iter().collect()),
+            as_: None,
+            when: None,
+            except_when: None,
+            retry: None,
+            do_: None,
+            then: None,
+        };
+        assert!(!catch_matches(&inner, &catch2, &err, &ctx, &ec).unwrap());
+    }
+
+    #[test]
+    fn set_error_var_and_interpolate() {
+        let mut ec = crate::engine::ExecContext {
+            inner: inner(),
+            execution_id: "e".into(),
+            context: Arc::new(tokio::sync::Mutex::new(Value::Null)),
+            secrets: Default::default(),
+            workflow_descriptor: Value::Null,
+            runtime_descriptor: Value::Null,
+            ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            timeout: None,
+            cancel: Arc::new(crate::runtime::Cancellation::new()),
+            loop_vars: Default::default(),
+        };
+        let catch = CatchDef {
+            filter: None,
+            as_: Some("err".into()),
+            when: None,
+            except_when: None,
+            retry: None,
+            do_: None,
+            then: None,
+        };
+        let err = WorkflowError::new(
+            ows_runtime_core::ErrorKind::Fault,
+            ows_runtime_core::ProblemDetails::standard(
+                ows_runtime_core::StandardErrorType::Runtime,
+            ),
+        );
+        set_error_var(&mut ec, &catch, &err);
+        assert!(ec.loop_vars.contains_key("err"));
+    }
+
+    #[test]
+    fn interpolate_helpers() {
+        let inner = inner();
+        let ctx = ExpressionContext {
+            input: json!({"x":"val"}),
+            ..Default::default()
+        };
+        assert_eq!(interpolate_string(&inner, "${ .x }", &ctx).unwrap(), "val");
+        let list = interpolate_strings(&inner, &["a".into(), "${ .x }".into()], &ctx).unwrap();
+        assert_eq!(list, vec!["a", "val"]);
+        let env = interpolate_env(
+            &inner,
+            &[("K".to_string(), "${ .x }".to_string())]
+                .into_iter()
+                .collect(),
+            &ctx,
+        )
+        .unwrap();
+        assert_eq!(env["K"], "val");
+    }
+
+    #[test]
+    fn compute_delay_with_jitter() {
+        let inner = inner();
+        let p = RetryPolicyDef {
+            delay: Some(Duration::from_secs(1)),
+            backoff: Backoff::Constant,
+            jitter: Some((Duration::ZERO, Duration::from_millis(10))),
+            ..retry_policy(None, None, None, Backoff::Constant)
+        };
+        let d = compute_delay(&inner, &p, 1);
+        assert!(
+            d >= Duration::from_secs(1) && d <= Duration::from_secs(1) + Duration::from_millis(10)
+        );
+    }
+
+    #[test]
+    fn resolve_references() {
+        let wf = Arc::new(crate::ir::CompiledWorkflow {
+            id: crate::workflow_id(
+                &ows_runtime_dsl::from_yaml(
+                    "document: { dsl: '1.0.3', namespace: n, name: w, version: '1' }
+do:
+  - a: { set: { x: 1 } }
+",
+                )
+                .unwrap(),
+            ),
+            definition: ows_runtime_dsl::from_yaml(
+                "document: { dsl: '1.0.3', namespace: n, name: w, version: '1' }
+do:
+  - a: { set: { x: 1 } }
+",
+            )
+            .unwrap(),
+            tasks: vec![],
+            task_index: Default::default(),
+            input: Default::default(),
+            output: Default::default(),
+            timeout: None,
+            evaluate: crate::ir::EvalConfig::default(),
+            secrets: vec![],
+            components: Some(
+                serverless_workflow_core::models::workflow::ComponentDefinitionCollection {
+                    errors: Some(
+                        [(
+                            "myErr".into(),
+                            crate::dsl_models::ErrorDefinition::new(
+                                "https://x/e",
+                                "E",
+                                json!(400),
+                                None,
+                                None,
+                            ),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                    functions: Some(
+                        [(
+                            "fn".into(),
+                            crate::dsl_models::TaskDefinition::Call(
+                                crate::dsl_models::CallTaskDefinition::new("http", None, None),
+                            ),
+                        )]
+                        .into_iter()
+                        .collect(),
+                    ),
+                    ..Default::default()
+                },
+            ),
+            schedule: None,
+        });
+        let inner = inner();
+        assert!(resolve_error_ref(&inner, &wf, "myErr").is_some());
+        assert!(resolve_error_ref(&inner, &wf, "nope").is_none());
+        assert!(resolve_function(&wf, "fn").is_some());
+        assert!(resolve_function(&wf, "nope").is_none());
+    }
+}

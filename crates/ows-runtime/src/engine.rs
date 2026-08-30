@@ -504,3 +504,35 @@ pub(crate) fn iso_time(epoch_seconds: i64) -> String {
         .map(|d| d.to_rfc3339_opts(chrono::SecondsFormat::Secs, true))
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_directives() {
+        assert!(matches!(
+            parse_directive("continue"),
+            FlowDirective::Continue
+        ));
+        assert!(matches!(parse_directive("exit"), FlowDirective::Exit));
+        assert!(matches!(parse_directive("end"), FlowDirective::End));
+        assert!(matches!(parse_directive("someTask"), FlowDirective::Goto(s) if s == "someTask"));
+    }
+
+    #[test]
+    fn truthiness_semantics() {
+        assert!(is_truthy(&json!(0)));
+        assert!(is_truthy(&json!("")));
+        assert!(is_truthy(&json!([])));
+        assert!(!is_truthy(&json!(false)));
+        assert!(!is_truthy(&json!(null)));
+        assert!(is_truthy(&json!(true)));
+    }
+
+    #[test]
+    fn iso_time_formats() {
+        assert_eq!(iso_time(0), "1970-01-01T00:00:00Z");
+        assert_eq!(iso_time(1700000000), "2023-11-14T22:13:20Z");
+    }
+}

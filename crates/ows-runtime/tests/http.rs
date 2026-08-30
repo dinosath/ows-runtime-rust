@@ -1,8 +1,9 @@
 #![cfg(feature = "http")]
+#![allow(clippy::result_large_err)]
 
 use ows_runtime::Runtime;
 use ows_runtime_core::RuntimePolicy;
-use serde_json::json;
+use serde_json::{json, Value};
 
 #[tokio::test]
 async fn http_call_get() {
@@ -28,7 +29,12 @@ do:
     )
     .unwrap();
     let wf = runtime.register_definition(&def).unwrap();
-    let out = runtime.run(wf, json!({})).await;
+    let out: Result<Value, ows_runtime_core::WorkflowError> = tokio::time::timeout(
+        std::time::Duration::from_secs(10),
+        runtime.run(wf, json!({})),
+    )
+    .await
+    .unwrap_or_else(|_| Err(ows_runtime_core::WorkflowError::timeout(None)));
     match out {
         Ok(v) => {
             assert!(v.get("url").is_some(), "expected url in response, got {v}");

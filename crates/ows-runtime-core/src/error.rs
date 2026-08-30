@@ -308,3 +308,129 @@ impl From<serde_json::Error> for WorkflowError {
         Self::new(ErrorKind::Parse, problem).with_source(err)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn error_kind_strings() {
+        assert_eq!(ErrorKind::Parse.as_str(), "parse");
+        assert_eq!(ErrorKind::Timeout.as_str(), "timeout");
+        assert_eq!(ErrorKind::Cancelled.as_str(), "cancelled");
+    }
+
+    #[test]
+    fn standard_error_types() {
+        assert_eq!(
+            StandardErrorType::Timeout.uri(),
+            format!("{ERROR_TYPE_PREFIX}/timeout")
+        );
+        assert_eq!(StandardErrorType::Timeout.default_status(), 408);
+        assert_eq!(StandardErrorType::Authorization.default_status(), 403);
+        assert_eq!(StandardErrorType::Authentication.default_status(), 401);
+        assert_eq!(StandardErrorType::Validation.default_status(), 400);
+    }
+
+    #[test]
+    fn problem_details_builds() {
+        let p = ProblemDetails::new("https://x/errors/e", "E", 500)
+            .with_detail("detail")
+            .with_instance("/do/0")
+            .with_extension("k", serde_json::json!("v"));
+        assert_eq!(p.status, 500);
+        assert_eq!(p.detail.as_deref(), Some("detail"));
+        let v = p.to_value();
+        assert_eq!(v["type"], "https://x/errors/e");
+        assert_eq!(v["extensions"]["k"], "v");
+    }
+
+    #[test]
+    fn workflow_error_wraps_problem() {
+        let err = WorkflowError::new(
+            ErrorKind::Fault,
+            ProblemDetails::standard(StandardErrorType::Runtime),
+        )
+        .with_task("/do/0/x")
+        .with_execution("exec-1");
+        assert_eq!(err.kind, ErrorKind::Fault);
+        assert_eq!(err.task.as_deref(), Some("/do/0/x"));
+        assert_eq!(err.execution_id.as_deref(), Some("exec-1"));
+        assert_eq!(
+            err.to_problem_json()["type"],
+            StandardErrorType::Runtime.uri()
+        );
+    }
+
+    #[test]
+    fn timeout_and_cancelled_errors() {
+        let t = WorkflowError::timeout(Some("/do/0".to_string()));
+        assert_eq!(t.kind, ErrorKind::Timeout);
+        assert_eq!(t.problem.status, 408);
+        let c = WorkflowError::cancelled();
+        assert_eq!(c.kind, ErrorKind::Cancelled);
+    }
+
+    #[test]
+    fn workflow_error_clone_preserves_fields() {
+        let err = WorkflowError::new(
+            ErrorKind::Runtime,
+            ProblemDetails::standard(StandardErrorType::Runtime),
+        )
+        .with_execution("e");
+        let c = err.clone();
+        assert_eq!(c.execution_id, err.execution_id);
+        assert_eq!(c.problem, err.problem);
+    }
+
+    #[test]
+    fn error_kind_display_all_variants() {
+        for (kind, s) in [
+            (ErrorKind::Parse, "parse"),
+            (ErrorKind::Schema, "schema"),
+            (ErrorKind::Semantic, "semantic"),
+            (ErrorKind::Runtime, "runtime"),
+            (ErrorKind::Expression, "expression"),
+            (ErrorKind::Timeout, "timeout"),
+            (ErrorKind::Cancelled, "cancelled"),
+            (ErrorKind::Fault, "fault"),
+            (ErrorKind::Policy, "policy"),
+            (ErrorKind::Communication, "communication"),
+        ] {
+            assert_eq!(kind.to_string(), s);
+            assert_eq!(kind.as_str(), s);
+        }
+    }
+
+    #[test]
+    fn standard_error_types_all() {
+        for t in [
+            StandardErrorType::Configuration,
+            StandardErrorType::Validation,
+            StandardErrorType::Expression,
+            StandardErrorType::Authentication,
+            StandardErrorType::Authorization,
+            StandardErrorType::Timeout,
+            StandardErrorType::Communication,
+            StandardErrorType::Runtime,
+        ] {
+            assert!(t.uri().contains("/errors/"));
+            assert!(t.default_status() >= 400);
+            assert!(!ProblemDetails::standard(t).title.is_empty());
+        }
+    }
+
+    #[test]
+    fn workflow_error_standard_and_display() {
+        let err = WorkflowError::standard(ErrorKind::Expression, StandardErrorType::Expression);
+        assert_eq!(err.kind, ErrorKind::Expression);
+        assert!(!err.to_string().is_empty());
+    }
+
+    #[test]
+    fn from_json_error() {
+        let e = serde_json::from_str::<serde_json::Value>("{").unwrap_err();
+        let err = WorkflowError::from(e);
+        assert_eq!(err.kind, ErrorKind::Parse);
+    }
+}

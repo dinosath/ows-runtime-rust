@@ -235,3 +235,131 @@ fn common_then(task: &TaskDefinition) -> Option<&String> {
         TaskDefinition::Wait(t) => t.common.then.as_ref(),
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(yaml: &str) -> WorkflowDefinition {
+        crate::from_yaml(yaml).unwrap()
+    }
+
+    #[test]
+    fn valid_workflow_passes() {
+        let wf = parse(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - a: { set: { x: 1 } }
+  - b: { set: { y: 2 } }
+"#,
+        );
+        assert!(validate(&wf).is_valid());
+    }
+
+    #[test]
+    fn missing_name_and_empty_do_fail() {
+        let wf = parse(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: '', version: '0.1.0' }
+do: []
+"#,
+        );
+        let report = validate(&wf);
+        assert!(!report.is_valid());
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "document.name.required"));
+        assert!(report.issues.iter().any(|i| i.code == "do.empty"));
+    }
+
+    #[test]
+    fn unknown_flow_target_fails() {
+        let wf = parse(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - a:
+      set: { x: 1 }
+      then: missing
+"#,
+        );
+        let report = validate(&wf);
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "flow.unknown-target"));
+    }
+
+    #[test]
+    fn unsupported_dsl_version_fails() {
+        let wf = parse(
+            r#"
+document: { dsl: '2.0.0', namespace: t, name: w, version: '0.1.0' }
+do:
+  - a: { set: { x: 1 } }
+"#,
+        );
+        let report = validate(&wf);
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "document.dsl.unsupported"));
+    }
+
+    #[test]
+    fn multiple_switch_defaults_fail() {
+        let wf = parse(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - sw:
+      switch:
+        - d1: { then: a }
+        - d2: { then: b }
+"#,
+        );
+        let report = validate(&wf);
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "switch.multiple-default"));
+    }
+
+    #[test]
+    fn switch_case_without_then_fails() {
+        let wf = parse(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - sw:
+      switch:
+        - c1:
+            when: '.a == 1'
+"#,
+        );
+        let report = validate(&wf);
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "switch.then.required"));
+    }
+
+    #[test]
+    fn for_without_in_is_parse_error() {
+        // The SDK requires `for.in`, so a missing `in` fails at deserialization.
+        assert!(crate::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - loop:
+      for:
+        each: i
+      do:
+        - x: { set: { a: 1 } }
+"#
+        )
+        .is_err());
+    }
+}

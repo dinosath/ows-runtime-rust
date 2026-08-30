@@ -1248,10 +1248,12 @@ dependencies = [
 name = "ows-runtime-observability"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "ows-runtime-core",
  "ows-runtime-events",
  "serde",
  "serde_json",
+ "tokio",
  "tracing",
  "tracing-subscriber",
 ]

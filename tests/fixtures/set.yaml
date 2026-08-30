@@ -1,0 +1,10 @@
+# A minimal OWS workflow fixture (set task).
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: set-example
+  version: '0.1.0'
+do:
+  - setGreeting:
+      set:
+        message: '${ "Hello, \(.name)!" }'

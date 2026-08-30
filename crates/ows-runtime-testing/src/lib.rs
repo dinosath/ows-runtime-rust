@@ -125,8 +125,9 @@ impl ServiceInvoker for FakeServiceInvoker {
     }
 }
 
-/// A [`FunctionInvoker`] that drives the `http` function through a
-/// [`FakeServiceInvoker`], so `call: http` tasks can be tested without network.
+/// A [`FunctionInvoker`](ows_runtime::service::FunctionInvoker) that drives the
+/// `http` function through a [`FakeServiceInvoker`], so `call: http` tasks can
+/// be tested without network.
 #[derive(Clone)]
 pub struct FakeHttpFunction {
     service: FakeServiceInvoker,

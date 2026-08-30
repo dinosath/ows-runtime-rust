@@ -42,3 +42,8 @@ ows-runtime-testing = { path = "../ows-runtime-testing" }
 proptest = { workspace = true }
 ows-runtime-events = { path = "../ows-runtime-events" }
 serde_yaml = { workspace = true }
+criterion = { workspace = true }
+
+[[bench]]
+name = "runtime"
+harness = false

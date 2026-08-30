@@ -1,3 +1,5 @@
+#![cfg(feature = "http")]
+
 use ows_runtime::Runtime;
 use ows_runtime_core::RuntimePolicy;
 use serde_json::json;

@@ -15,9 +15,9 @@ use tokio::sync::{oneshot, Notify};
 use crate::compile;
 use crate::engine;
 use crate::ir::CompiledWorkflow;
-use crate::service::{
-    FunctionInvoker, HttpServiceInvoker, NoopProcessRunner, NoopServiceInvoker, OpenApiInvoker,
-};
+use crate::service::{FunctionInvoker, NoopProcessRunner, NoopServiceInvoker};
+#[cfg(feature = "http")]
+use crate::service::{HttpServiceInvoker, OpenApiInvoker};
 
 /// Shared services backing all executions of a [`Runtime`].
 pub struct RuntimeInner {
@@ -37,12 +37,15 @@ pub struct RuntimeInner {
     pub workflows: Arc<std::sync::Mutex<HashMap<String, Arc<CompiledWorkflow>>>>,
     /// A log of task names in execution order (used for ordering assertions).
     pub task_order: Arc<std::sync::Mutex<Vec<String>>>,
+    #[cfg(feature = "validation")]
     validator: Option<Arc<JsonSchemaValidator>>,
 }
 
 /// A JSON Schema validator backed by the `jsonschema` crate.
+#[cfg(feature = "validation")]
 pub(crate) struct JsonSchemaValidator;
 
+#[cfg(feature = "validation")]
 impl JsonSchemaValidator {
     pub(crate) fn validate(
         &self,
@@ -76,9 +79,17 @@ impl RuntimeInner {
         document: &serde_json::Value,
         value: &serde_json::Value,
     ) -> Result<(), Vec<String>> {
-        match &self.validator {
-            Some(v) => v.validate(document, value),
-            None => Ok(()),
+        #[cfg(feature = "validation")]
+        {
+            match &self.validator {
+                Some(v) => v.validate(document, value),
+                None => Ok(()),
+            }
+        }
+        #[cfg(not(feature = "validation"))]
+        {
+            let _ = (document, value);
+            Ok(())
         }
     }
 
@@ -368,11 +379,14 @@ impl RuntimeBuilder {
 
     /// Builds the runtime.
     pub fn build(self) -> Result<Runtime, WorkflowError> {
+        #[cfg(feature = "validation")]
         let validator = if self.enable_schema_validation {
             Some(Arc::new(JsonSchemaValidator))
         } else {
             None
         };
+        #[cfg(not(feature = "validation"))]
+        let validator = ();
 
         let inner = Arc::new(RuntimeInner {
             expression: self
@@ -404,25 +418,29 @@ impl RuntimeBuilder {
                 .unwrap_or_else(|| Arc::new(ows_runtime_scheduler::NoopScheduler)),
             workflows: Arc::new(std::sync::Mutex::new(HashMap::new())),
             task_order: Arc::new(std::sync::Mutex::new(Vec::new())),
+            #[cfg(feature = "validation")]
             validator,
         });
 
         // Register the default HTTP function backed by the service invoker.
         // (The invoker itself enforces the network policy.)
-        let mut functions = inner.functions.write().unwrap();
-        if !functions.contains_key("http") {
-            functions.insert(
-                "http".to_string(),
-                Arc::new(HttpServiceInvoker::new(inner.clone())),
-            );
+        #[cfg(feature = "http")]
+        {
+            let mut functions = inner.functions.write().unwrap();
+            if !functions.contains_key("http") {
+                functions.insert(
+                    "http".to_string(),
+                    Arc::new(HttpServiceInvoker::new(inner.clone())),
+                );
+            }
+            if !functions.contains_key("openapi") {
+                functions.insert(
+                    "openapi".to_string(),
+                    Arc::new(OpenApiInvoker::new(inner.clone())),
+                );
+            }
+            drop(functions);
         }
-        if !functions.contains_key("openapi") {
-            functions.insert(
-                "openapi".to_string(),
-                Arc::new(OpenApiInvoker::new(inner.clone())),
-            );
-        }
-        drop(functions);
 
         Ok(Runtime { inner })
     }
@@ -435,4 +453,5 @@ impl Default for RuntimeBuilder {
 }
 
 // Re-export the HTTP invoker type for users who want to inspect it.
+#[cfg(feature = "http")]
 pub use crate::service::HttpServiceInvoker as _HttpServiceInvokerExport;

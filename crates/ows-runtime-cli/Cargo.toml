@@ -19,4 +19,4 @@ serde_yaml = { workspace = true }
 tokio = { workspace = true }
 ows-runtime-core = { path = "../ows-runtime-core" }
 ows-runtime-dsl = { path = "../ows-runtime-dsl" }
-ows-runtime = { path = "../ows-runtime" }
+ows-runtime = { path = "../ows-runtime", features = ["http", "validation"] }

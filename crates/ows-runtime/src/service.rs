@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+#[cfg(feature = "http")]
 use base64::Engine as _;
 use ows_runtime_core::{
     ExpressionContext, ProcessResult, ProcessRunner, ServiceInvoker, ServiceRequest,
@@ -35,11 +36,13 @@ pub trait FunctionInvoker: Send + Sync {
 /// It fetches the referenced OpenAPI document, resolves the operation by
 /// `operationId`, and performs the HTTP call. Parameters are interpolated and
 /// split into path, query and body parameters.
+#[cfg(feature = "http")]
 pub struct OpenApiInvoker {
     inner: Arc<RuntimeInner>,
     client: reqwest::Client,
 }
 
+#[cfg(feature = "http")]
 impl OpenApiInvoker {
     /// Creates a new OpenAPI invoker.
     pub fn new(inner: Arc<RuntimeInner>) -> Self {
@@ -200,6 +203,7 @@ impl FunctionInvoker for OpenApiInvoker {
 
 /// Finds the (method, path) for an operationId in an OpenAPI 3.x document.
 /// Interpolates expressions in an OpenAPI parameters map.
+#[cfg(feature = "http")]
 fn interpolate_params(
     inner: &Arc<RuntimeInner>,
     params: &Map<String, Value>,
@@ -220,6 +224,7 @@ fn interpolate_params(
     Ok(out)
 }
 
+#[cfg(feature = "http")]
 fn find_operation(spec: &Value, operation_id: &str) -> Option<(String, String)> {
     let paths = spec.get("paths")?.as_object()?;
     for (path, item) in paths {
@@ -294,11 +299,13 @@ impl ProcessRunner for NoopProcessRunner {
 /// It enforces the runtime network policy before making any request. The
 /// endpoint URI and its parameters support `${...}` expression interpolation and
 /// `{var}` URI templates resolved against `$workflow.input`.
+#[cfg(feature = "http")]
 pub struct HttpServiceInvoker {
     inner: Arc<RuntimeInner>,
     client: reqwest::Client,
 }
 
+#[cfg(feature = "http")]
 impl HttpServiceInvoker {
     /// Creates a new HTTP function invoker.
     pub fn new(inner: Arc<RuntimeInner>) -> Self {
@@ -426,6 +433,7 @@ impl FunctionInvoker for HttpServiceInvoker {
     }
 }
 
+#[cfg(feature = "http")]
 fn is_json_content_type(headers: &HashMap<String, String>) -> bool {
     headers
         .get("content-type")
@@ -433,6 +441,7 @@ fn is_json_content_type(headers: &HashMap<String, String>) -> bool {
         .unwrap_or(false)
 }
 
+#[cfg(feature = "http")]
 fn deserialize_body(bytes: &[u8], content_type: &str) -> Option<Value> {
     if content_type.contains("json") {
         serde_json::from_slice(bytes).ok()
@@ -441,6 +450,7 @@ fn deserialize_body(bytes: &[u8], content_type: &str) -> Option<Value> {
     }
 }
 
+#[cfg(feature = "http")]
 fn resolve_endpoint(
     endpoint: &Value,
     ctx: &ExpressionContext,
@@ -475,6 +485,7 @@ fn resolve_endpoint(
     Ok((uri, auth))
 }
 
+#[cfg(feature = "http")]
 fn expand_uri_template(uri: &str, workflow: &Value) -> String {
     // Replace {var} with workflow input values.
     let input = workflow.get("input");
@@ -502,6 +513,7 @@ fn expand_uri_template(uri: &str, workflow: &Value) -> String {
     out
 }
 
+#[cfg(feature = "http")]
 fn resolve_headers(
     headers: Option<&Value>,
     ctx: &ExpressionContext,
@@ -521,6 +533,7 @@ fn resolve_headers(
     Ok(out)
 }
 
+#[cfg(feature = "http")]
 fn resolve_query(
     query: Option<&Value>,
     ctx: &ExpressionContext,
@@ -541,6 +554,7 @@ fn resolve_query(
     Ok(Some(out))
 }
 
+#[cfg(feature = "http")]
 fn resolve_body(
     body: Option<&Value>,
     ctx: &ExpressionContext,
@@ -554,6 +568,7 @@ fn resolve_body(
     Ok(Some(resolved))
 }
 
+#[cfg(feature = "http")]
 fn interpolate_value(
     inner: &Arc<RuntimeInner>,
     value: &Value,
@@ -579,6 +594,7 @@ fn interpolate_value(
     }
 }
 
+#[cfg(feature = "http")]
 fn apply_auth(
     auth: Option<Value>,
     headers: &mut HashMap<String, String>,
@@ -601,6 +617,7 @@ fn apply_auth(
     Ok(())
 }
 
+#[cfg(feature = "http")]
 fn resolve_optional_str(
     v: Option<&Value>,
     ctx: &ExpressionContext,
@@ -618,6 +635,7 @@ fn resolve_optional_str(
     }
 }
 
+#[cfg(feature = "http")]
 fn enforce_network_policy(inner: &Arc<RuntimeInner>, uri: &str) -> Result<(), WorkflowError> {
     let policy = &inner.policy;
     let parsed = url::Url::parse(uri)

@@ -7,10 +7,16 @@ rust-version.workspace = true
 description = "Execution engine for the Open Workflow Specification"
 repository.workspace = true
 
+[features]
+default = ["http", "validation"]
+# Enables the built-in HTTP and OpenAPI function invokers.
+http = ["dep:reqwest", "dep:base64"]
+# Enables JSON Schema input/output validation.
+validation = ["dep:jsonschema"]
+
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
-serde_yaml = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
@@ -20,9 +26,9 @@ http = { workspace = true }
 indexmap = { workspace = true }
 url = { workspace = true }
 chrono = { workspace = true }
-jsonschema = { workspace = true }
-reqwest = { workspace = true }
-base64 = { workspace = true }
+jsonschema = { workspace = true, optional = true }
+reqwest = { workspace = true, optional = true }
+base64 = { workspace = true, optional = true }
 ows-runtime-core = { path = "../ows-runtime-core" }
 ows-runtime-dsl = { path = "../ows-runtime-dsl" }
 ows-runtime-expressions = { path = "../ows-runtime-expressions" }
@@ -34,3 +40,5 @@ serverless_workflow_core = { workspace = true }
 [dev-dependencies]
 ows-runtime-testing = { path = "../ows-runtime-testing" }
 proptest = { workspace = true }
+ows-runtime-events = { path = "../ows-runtime-events" }
+serde_yaml = { workspace = true }

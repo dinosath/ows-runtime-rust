@@ -1,0 +1,22 @@
+[package]
+name = "ows-runtime-cli"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CLI for the OWS runtime"
+repository.workspace = true
+
+[[bin]]
+name = "ows-runtime"
+path = "src/main.rs"
+
+[dependencies]
+clap = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+tokio = { workspace = true }
+ows-runtime-core = { path = "../ows-runtime-core" }
+ows-runtime-dsl = { path = "../ows-runtime-dsl" }
+ows-runtime = { path = "../ows-runtime" }

@@ -1,0 +1,16 @@
+[package]
+name = "ows-runtime-testing"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Test helpers, fakes and deterministic runtime construction for the OWS runtime"
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+ows-runtime-core = { path = "../ows-runtime-core" }
+ows-runtime-events = { path = "../ows-runtime-events" }
+ows-runtime = { path = "../ows-runtime" }

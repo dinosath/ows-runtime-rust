@@ -1,0 +1,36 @@
+[package]
+name = "ows-runtime"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Execution engine for the Open Workflow Specification"
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+serde_yaml = { workspace = true }
+thiserror = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+regex = { workspace = true }
+http = { workspace = true }
+indexmap = { workspace = true }
+url = { workspace = true }
+chrono = { workspace = true }
+jsonschema = { workspace = true }
+reqwest = { workspace = true }
+base64 = { workspace = true }
+ows-runtime-core = { path = "../ows-runtime-core" }
+ows-runtime-dsl = { path = "../ows-runtime-dsl" }
+ows-runtime-expressions = { path = "../ows-runtime-expressions" }
+ows-runtime-events = { path = "../ows-runtime-events" }
+ows-runtime-scheduler = { path = "../ows-runtime-scheduler" }
+ows-runtime-observability = { path = "../ows-runtime-observability" }
+serverless_workflow_core = { workspace = true }
+
+[dev-dependencies]
+ows-runtime-testing = { path = "../ows-runtime-testing" }
+proptest = { workspace = true }

@@ -1,0 +1,17 @@
+[package]
+name = "ows-runtime-events"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "CloudEvents, event matching and in-memory event broker for the OWS runtime"
+repository.workspace = true
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+regex = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+ows-runtime-core = { path = "../ows-runtime-core" }

@@ -9,6 +9,7 @@
 
 use std::path::Path;
 
+use serde_json::Value;
 use serverless_workflow_core::models::workflow::WorkflowDefinition;
 use thiserror::Error;
 
@@ -46,12 +47,70 @@ impl DefinitionError {
 
 /// Parses a workflow definition from a YAML string.
 pub fn from_yaml(yaml: &str) -> Result<WorkflowDefinition, DefinitionError> {
-    serde_yaml::from_str(yaml).map_err(|e| DefinitionError::Parse(e.to_string()))
+    let mut value: serde_json::Value =
+        serde_yaml::from_str(yaml).map_err(|e| DefinitionError::Parse(e.to_string()))?;
+    normalize_definition(&mut value);
+    serde_json::from_value(value).map_err(|e| DefinitionError::Parse(e.to_string()))
 }
 
 /// Parses a workflow definition from a JSON string.
 pub fn from_json(json: &str) -> Result<WorkflowDefinition, DefinitionError> {
-    serde_json::from_str(json).map_err(|e| DefinitionError::Parse(e.to_string()))
+    let mut value: serde_json::Value =
+        serde_json::from_str(json).map_err(|e| DefinitionError::Parse(e.to_string()))?;
+    normalize_definition(&mut value);
+    serde_json::from_value(value).map_err(|e| DefinitionError::Parse(e.to_string()))
+}
+
+/// Applies OWS default normalization that the underlying SDK model does not
+/// express, so parsed definitions remain spec-compliant.
+///
+/// Currently this injects the default `fork.compete: false` where omitted (the
+/// spec defaults `compete` to `false`, but the SDK model requires the field).
+pub fn normalize_definition(value: &mut serde_json::Value) {
+    normalize_scope(value);
+}
+
+fn normalize_scope(value: &mut serde_json::Value) {
+    let Value::Object(map) = value else {
+        return;
+    };
+    // Normalize `do` lists (and nested scope lists).
+    if let Some(Value::Array(tasks)) = map.get_mut("do") {
+        for task in tasks.iter_mut() {
+            normalize_task(task);
+        }
+    }
+    if let Some(Value::Array(tasks)) = map.get_mut("try") {
+        for task in tasks.iter_mut() {
+            normalize_task(task);
+        }
+    }
+    if let Some(Value::Object(catch)) = map.get_mut("catch") {
+        if let Some(Value::Array(tasks)) = catch.get_mut("do") {
+            for task in tasks.iter_mut() {
+                normalize_task(task);
+            }
+        }
+    }
+    if let Some(Value::Object(fork)) = map.get_mut("fork") {
+        if !fork.contains_key("compete") {
+            fork.insert("compete".to_string(), serde_json::Value::Bool(false));
+        }
+        if let Some(Value::Array(branches)) = fork.get_mut("branches") {
+            for task in branches.iter_mut() {
+                normalize_task(task);
+            }
+        }
+    }
+}
+
+fn normalize_task(value: &mut serde_json::Value) {
+    let Value::Object(map) = value else {
+        return;
+    };
+    for (_name, task) in map.iter_mut() {
+        normalize_scope(task);
+    }
 }
 
 /// Parses a workflow definition from raw bytes, attempting YAML then JSON.

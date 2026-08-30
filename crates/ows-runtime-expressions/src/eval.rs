@@ -209,8 +209,12 @@ fn apply_binop(op: BinOp, l: &Value, r: &Value) -> Result<Value, ExpressionError
 fn add(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
     match (l, r) {
         (Value::Number(a), Value::Number(b)) => {
-            let sum = a.as_f64().unwrap() + b.as_f64().unwrap();
-            Ok(json_num(sum))
+            if let (Some(ai), Some(bi)) = (a.as_i64(), b.as_i64()) {
+                Ok(json_int(ai + bi))
+            } else {
+                let sum = a.as_f64().unwrap() + b.as_f64().unwrap();
+                Ok(json_num(sum))
+            }
         }
         (Value::String(a), Value::String(b)) => Ok(Value::String(format!("{a}{b}"))),
         (Value::Array(a), Value::Array(b)) => {
@@ -236,7 +240,11 @@ fn add(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
 fn sub(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
     match (l, r) {
         (Value::Number(a), Value::Number(b)) => {
-            Ok(json_num(a.as_f64().unwrap() - b.as_f64().unwrap()))
+            if let (Some(ai), Some(bi)) = (a.as_i64(), b.as_i64()) {
+                Ok(json_int(ai - bi))
+            } else {
+                Ok(json_num(a.as_f64().unwrap() - b.as_f64().unwrap()))
+            }
         }
         (Value::Array(a), Value::Array(b)) => {
             let out = a.iter().filter(|x| !b.contains(x)).cloned().collect();
@@ -251,7 +259,11 @@ fn sub(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
 fn mul(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
     match (l, r) {
         (Value::Number(a), Value::Number(b)) => {
-            Ok(json_num(a.as_f64().unwrap() * b.as_f64().unwrap()))
+            if let (Some(ai), Some(bi)) = (a.as_i64(), b.as_i64()) {
+                Ok(json_int(ai * bi))
+            } else {
+                Ok(json_num(a.as_f64().unwrap() * b.as_f64().unwrap()))
+            }
         }
         (Value::String(s), Value::Number(n)) => {
             let n = n.as_f64().unwrap().max(0.0) as usize;
@@ -290,11 +302,19 @@ fn div(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
 fn mod_op(l: &Value, r: &Value) -> Result<Value, ExpressionError> {
     match (l, r) {
         (Value::Number(a), Value::Number(b)) => {
-            let b = b.as_f64().unwrap();
-            if b == 0.0 {
-                Err(ExpressionError::eval("modulo by zero"))
+            if let (Some(ai), Some(bi)) = (a.as_i64(), b.as_i64()) {
+                if bi == 0 {
+                    Err(ExpressionError::eval("modulo by zero"))
+                } else {
+                    Ok(json_int(ai % bi))
+                }
             } else {
-                Ok(json_num(a.as_f64().unwrap() % b))
+                let b = b.as_f64().unwrap();
+                if b == 0.0 {
+                    Err(ExpressionError::eval("modulo by zero"))
+                } else {
+                    Ok(json_num(a.as_f64().unwrap() % b))
+                }
             }
         }
         _ => Err(ExpressionError::type_error(format!(
@@ -764,6 +784,10 @@ pub fn to_string(v: &Value) -> String {
         Value::Number(n) => n.to_string(),
         Value::Array(_) | Value::Object(_) => serde_json::to_string(v).unwrap_or_default(),
     }
+}
+
+fn json_int(n: i64) -> Value {
+    Value::Number(serde_json::Number::from(n))
 }
 
 fn json_num(n: f64) -> Value {

@@ -10,6 +10,7 @@ repository.workspace = true
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+async-trait = { workspace = true }
 tokio = { workspace = true }
 ows-runtime-core = { path = "../ows-runtime-core" }
 ows-runtime-events = { path = "../ows-runtime-events" }

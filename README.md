@@ -141,6 +141,9 @@ cargo fmt --all -- --check
 cargo test --test conformance   # runs the CTK runner
 ```
 
+Line coverage of the runtime library crates is measured with `cargo-llvm-cov` and
+enforced at **>= 90%** in CI (`./scripts/coverage.sh`).
+
 The runtime is deterministic in tests: clocks, RNG and UUIDs are injectable, and
 the event subsystem uses an in-memory broker. See
 [`docs/testing.md`](docs/testing.md).

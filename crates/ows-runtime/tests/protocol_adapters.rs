@@ -5,7 +5,7 @@
 #![cfg(feature = "http")]
 
 use ows_runtime::Runtime;
-use ows_runtime_core::RuntimePolicy;
+use ows_runtime_core::{ErrorKind, RuntimePolicy, WorkflowError};
 use serde_json::{json, Value};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
@@ -42,13 +42,22 @@ fn network_policy() -> RuntimePolicy {
 }
 
 async fn run_call(yaml: &str) -> Value {
-    let runtime = Runtime::builder()
-        .with_policy(network_policy())
-        .build()
-        .unwrap();
+    run_call_result(yaml, true)
+        .await
+        .expect("workflow should succeed")
+}
+
+/// Runs a `call` workflow and returns the raw result (success or fault).
+async fn run_call_result(yaml: &str, allow_network: bool) -> Result<Value, WorkflowError> {
+    let policy = if allow_network {
+        network_policy()
+    } else {
+        RuntimePolicy::default()
+    };
+    let runtime = Runtime::builder().with_policy(policy).build().unwrap();
     let def = ows_runtime_dsl::from_yaml(yaml).unwrap();
     let wf = runtime.register_definition(&def).unwrap();
-    runtime.run(wf, Value::Null).await.unwrap()
+    runtime.run(wf, Value::Null).await
 }
 
 #[tokio::test]
@@ -165,4 +174,76 @@ do:
     );
     let out = run_call(&yaml).await;
     assert_eq!(out, json!({ "ack": true }));
+}
+
+#[tokio::test]
+async fn mcp_surfaces_json_rpc_error() {
+    let (addr, port) = free_addr();
+    let body = r#"{"jsonrpc":"2.0","id":1,"error":{"code":-32601,"message":"Method not found"}}"#;
+    tokio::spawn(serve_once(addr, body));
+
+    let yaml = format!(
+        r#"
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: mcp-error
+  version: '1.0.0'
+do:
+  - useMcp:
+      call: mcp
+      with:
+        endpoint: http://127.0.0.1:{port}
+        tool: nope
+"#
+    );
+    let err = run_call_result(&yaml, true).await.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Communication);
+}
+
+#[tokio::test]
+async fn mcp_output_response_envelope() {
+    let (addr, port) = free_addr();
+    let body = r#"{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"ok"}],"isError":false}}"#;
+    tokio::spawn(serve_once(addr, body));
+
+    let yaml = format!(
+        r#"
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: mcp-response
+  version: '1.0.0'
+do:
+  - useMcp:
+      call: mcp
+      with:
+        endpoint: http://127.0.0.1:{port}
+        tool: greet
+        output: response
+"#
+    );
+    let out = run_call(&yaml).await;
+    assert_eq!(out["statusCode"], 200);
+    assert_eq!(out["content"]["result"]["content"][0]["text"], "ok");
+}
+
+#[tokio::test]
+async fn call_adapters_respect_network_policy() {
+    // Default deny-by-default policy blocks outbound calls before any request.
+    let yaml = r#"
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: mcp-deny
+  version: '1.0.0'
+do:
+  - useMcp:
+      call: mcp
+      with:
+        endpoint: http://example.com/mcp
+        tool: greet
+"#;
+    let err = run_call_result(yaml, false).await.unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Policy);
 }

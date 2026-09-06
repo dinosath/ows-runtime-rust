@@ -1410,4 +1410,57 @@ mod tests {
         let inner = rt.inner.clone();
         assert!(enforce_network_policy(&inner, "not a url").is_err());
     }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn shape_response_modes() {
+        let mut resp = HashMap::new();
+        resp.insert("content-type".into(), "application/json".into());
+        // "response" output mode returns the full envelope.
+        let out = shape_response(
+            "http://x/y",
+            "post",
+            &HashMap::new(),
+            200,
+            resp.clone(),
+            "application/json".into(),
+            br#"{"a":1}"#,
+            "response",
+        )
+        .unwrap();
+        assert_eq!(out["statusCode"], 200);
+        assert_eq!(out["content"], json!({"a": 1}));
+        assert_eq!(out["request"]["uri"], "http://x/y");
+        // Default "content" mode returns just the parsed body.
+        let content = shape_response(
+            "http://x/y",
+            "post",
+            &HashMap::new(),
+            200,
+            resp,
+            "application/json".into(),
+            br#"{"a":1}"#,
+            "content",
+        )
+        .unwrap();
+        assert_eq!(content, json!({"a": 1}));
+    }
+
+    #[cfg(feature = "http")]
+    #[test]
+    fn resolve_asyncapi_operation_found_and_missing() {
+        let doc = json!({
+            "user/signedup": { "publish": { "operationId": "onUserSignedUp" } }
+        });
+        let channels = doc.as_object().unwrap();
+        let found = resolve_asyncapi_operation(channels, "onUserSignedUp", "").unwrap();
+        assert_eq!(found.channel, "user/signedup");
+        // By channel name.
+        let found = resolve_asyncapi_operation(channels, "", "user/signedup").unwrap();
+        assert_eq!(found.channel, "user/signedup");
+        // Unknown operation -> error.
+        assert!(resolve_asyncapi_operation(channels, "nope", "").is_err());
+        // Unknown channel -> error.
+        assert!(resolve_asyncapi_operation(channels, "", "missing").is_err());
+    }
 }

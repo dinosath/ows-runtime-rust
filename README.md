@@ -178,7 +178,9 @@ Roadmap items implemented:
 - OpenTelemetry integration crate (`ows-runtime-observability-otel`) that
   exports lifecycle events over OTLP/HTTP JSON.
 - `listen` `foreach` iteration (and gathering multiple events for `all`).
-- Expanded CTK-style scenario coverage and docs.
+- New scenario coverage for `listen` `foreach`/`all` and for the gRPC,
+  AsyncAPI, A2A and MCP call functions (offline, deterministic tests); these
+  enable the corresponding OWS CTK scenarios to run.
 
 Remaining / future work:
 

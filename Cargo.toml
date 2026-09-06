@@ -7,6 +7,8 @@ members = [
     "crates/ows-runtime-events",
     "crates/ows-runtime-scheduler",
     "crates/ows-runtime-observability",
+    "crates/ows-runtime-observability-otel",
+    "crates/ows-runtime-stores",
     "crates/ows-runtime",
     "crates/ows-runtime-testing",
     "crates/ows-runtime-cli",

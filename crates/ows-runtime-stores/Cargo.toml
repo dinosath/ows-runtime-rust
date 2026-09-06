@@ -1,0 +1,29 @@
+[package]
+name = "ows-runtime-stores"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Durable ExecutionStore adapters (SQLite, PostgreSQL, Redis) for the OWS runtime"
+repository.workspace = true
+
+[features]
+default = ["sqlite"]
+# Durable backend backed by a local SQLite database file.
+sqlite = ["dep:rusqlite"]
+# Durable backend backed by PostgreSQL.
+postgres = ["dep:tokio-postgres"]
+# Durable backend backed by Redis.
+redis = ["dep:redis"]
+
+[dependencies]
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+async-trait = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+ows-runtime-core = { path = "../ows-runtime-core" }
+rusqlite = { version = "0.32", features = ["bundled"], optional = true }
+tokio-postgres = { version = "0.7", optional = true }
+redis = { version = "0.27", features = ["tokio-comp"], optional = true }

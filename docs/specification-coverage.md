@@ -23,14 +23,14 @@ non-network ones.
 | `Try` task (catch, retry, do) | Try | ✅ | ✅ | ✅ | ✅ | |
 | `Raise` task | Raise | ✅ | ✅ | ✅ | ✅ | |
 | `Emit` task | Emit | ✅ | ✅ | ✅ | ✅ | |
-| `Listen` task | Listen | ✅ | ✅ | 🚧 | 🚧 | basic `one`/`any`/`all`; `foreach` pending |
+| `Listen` task | Listen | ✅ | ✅ | ✅ | 🚧 | `one`/`any`/`all` plus `foreach` iteration |
 | `Wait` task | Wait | ✅ | ✅ | ✅ | ✅ | |
 | `Call` task — HTTP | Call/HTTP | ✅ | ✅ | ✅ | 🚧 | network scenarios skip by default |
 | `Call` task — OpenAPI | Call/OpenAPI | ✅ | ✅ | ✅ | 🚧 | network |
-| `Call` task — gRPC | Call/gRPC | ❌ | — | — | — | adapter pending |
-| `Call` task — AsyncAPI | Call/AsyncAPI | ❌ | — | — | — | adapter pending |
-| `Call` task — A2A | Call/A2A | ❌ | — | — | — | adapter pending |
-| `Call` task — MCP | Call/MCP | ❌ | — | — | — | adapter pending |
+| `Call` task — gRPC | Call/gRPC | ✅ | ✅ | ✅ | — | bundled JSON/gateway adapter |
+| `Call` task — AsyncAPI | Call/AsyncAPI | ✅ | ✅ | ✅ | — | bundled adapter (HTTP publish) |
+| `Call` task — A2A | Call/A2A | ✅ | ✅ | ✅ | — | bundled JSON-RPC adapter |
+| `Call` task — MCP | Call/MCP | ✅ | ✅ | ✅ | — | bundled JSON-RPC adapter |
 | `Run` task — workflow | Run/Workflow | ✅ | ✅ | ✅ | — | |
 | `Run` task — shell/script/container | Run | 🚧 | ✅ | ✅ | — | deny-by-default; `ProcessRunner` policy |
 | Runtime expressions (jq) | Runtime Expressions | ✅ | ✅ | ✅ | ✅ | sandboxed subset |
@@ -49,16 +49,26 @@ non-network ones.
 | Extensions | Extensions | ❌ | — | — | — | |
 | Catalogs | Catalogs | ❌ | — | — | — | |
 | Runtime policy (deny-by-default) | Security | ✅ | ✅ | ✅ | — | |
-| Persistence (`ExecutionStore`) | Persistence | ✅ | ✅ | — | — | in-memory impl |
-| Observability (tracing, lifecycle events) | Observability | ✅ | ✅ | ✅ | — | |
+| Persistence (`ExecutionStore`) | Persistence | ✅ | ✅ | — | — | in-memory + SQLite/Postgres/Redis adapters in `ows-runtime-stores` |
+| Observability (tracing, lifecycle events) | Observability | ✅ | ✅ | ✅ | — | OTLP/HTTP JSON exporter in `ows-runtime-observability-otel` |
 
 ## Documented limitations
 
-- gRPC, AsyncAPI, A2A, MCP `call` functions are not bundled.
+- The gRPC adapter targets gRPC services exposed through a JSON transcoding /
+  HTTP gateway (the runtime does not embed protobuf code generation). AsyncAPI
+  and A2A/MCP adapters use HTTP/JSON transports (the AsyncAPI adapter publishes
+  over an HTTP channel binding). Full protobuf/HTTP-2 gRPC and broker-based
+  AsyncAPI require transport adapters and are opt-in.
 - `run` container/script/shell require a `ProcessRunner` adapter and are
   deny-by-default.
-- `listen` `foreach` iteration is not yet implemented.
+- `listen` `all` consumes one event per filter (correlation groups beyond a
+  single `from`/`expect` key are not fully modelled).
 - Scheduling triggers are parsed; the runtime registers them via the
   `Scheduler` trait but does not yet fire periodic executions end-to-end.
-- OpenTelemetry integration is not yet bundled (lifecycle events use the core
-  `EventPublisher` trait, so an OTel adapter can be added separately).
+- `ows-runtime-stores` provides durable `ExecutionStore` backends (SQLite by
+  default; PostgreSQL and Redis behind features). The in-memory store remains
+  the engine default; wiring a durable store into long-running resume is
+  layered on the same trait.
+- `ows-runtime-observability-otel` exports lifecycle events to an
+  OpenTelemetry collector over OTLP/HTTP JSON. A full tracing SDK (spans,
+  metrics, OTLP/gRPC) can be layered on the `EventPublisher` trait.

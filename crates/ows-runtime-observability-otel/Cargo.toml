@@ -1,0 +1,18 @@
+[package]
+name = "ows-runtime-observability-otel"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "OpenTelemetry (OTLP/HTTP JSON) integration for OWS runtime lifecycle events"
+repository.workspace = true
+
+[dependencies]
+serde_json = { workspace = true }
+async-trait = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }
+ows-runtime-core = { path = "../ows-runtime-core" }
+
+[dev-dependencies]
+tokio = { workspace = true }

@@ -16,12 +16,21 @@ those are adapters behind stable core traits.
 - **Implemented**: all twelve OWS task types (`set`, `do`, `for`, `fork`,
   `switch`, `try`, `emit`, `listen`, `raise`, `run`, `call`, `wait`), the jq
   runtime expression engine, data-flow pipeline, retries, timeouts, flow
-  directives, lifecycle events, and an in-memory event broker.
+  directives, lifecycle events, and an in-memory event broker. The `listen`
+  task supports `one`/`any`/`all` consumption with `foreach` iteration, and the
+  `call` task bundles HTTP, OpenAPI, gRPC, AsyncAPI, A2A and MCP function
+  adapters.
 - **Conformance**: the deterministic OWS CTK scenarios (12/12) pass. Network
   scenarios are skipped by default and can be enabled with `--include-network`.
-- **Experimental / Unsupported**: gRPC, AsyncAPI, A2A and MCP `call` functions
-  are not bundled (the HTTP and OpenAPI functions are). Container/script/shell
-  `run` processes are deny-by-default behind the `ProcessRunner` policy.
+- **Durability & observability**: durable `ExecutionStore` adapters (SQLite,
+  PostgreSQL, Redis) live in `ows-runtime-stores`, and an OpenTelemetry
+  OTLP/HTTP JSON exporter for lifecycle events lives in
+  `ows-runtime-observability-otel`.
+- **Experimental / opt-in transports**: the gRPC adapter targets gRPC services
+  exposed through a JSON/gateway endpoint, and the AsyncAPI adapter publishes
+  over an HTTP channel binding (no protobuf codegen or broker adapters are
+  bundled). Container/script/shell `run` processes are deny-by-default behind
+  the `ProcessRunner` policy.
 
 See [`docs/specification-coverage.md`](docs/specification-coverage.md) for the
 full feature matrix.
@@ -40,6 +49,8 @@ ows-runtime/
 │   ├── ows-runtime-events/        # CloudEvents, matching, in-memory broker
 │   ├── ows-runtime-scheduler/     # scheduling abstractions + cron
 │   ├── ows-runtime-observability/ # tracing + lifecycle event emission
+│   ├── ows-runtime-observability-otel/ # OTLP/HTTP JSON exporter
+│   ├── ows-runtime-stores/        # durable ExecutionStore adapters (SQLite/Postgres/Redis)
 │   ├── ows-runtime/               # compilation + execution engine
 │   ├── ows-runtime-testing/       # deterministic test helpers and fakes
 │   └── ows-runtime-cli/           # validate / compile / run / conformance
@@ -157,11 +168,25 @@ pin the CTK version.
 
 ## Roadmap
 
-- gRPC, AsyncAPI, A2A and MCP `call` function adapters.
-- Durable execution via `ExecutionStore` adapters (PostgreSQL, Redis, SQLite).
-- OpenTelemetry integration crate.
-- Loops/`listen` `foreach` iteration refinements.
-- Further CTK scenario coverage.
+Roadmap items implemented:
+
+- gRPC, AsyncAPI, A2A and MCP `call` function adapters (bundled; gRPC via a
+  JSON/gateway endpoint and AsyncAPI over an HTTP channel binding).
+- Durable execution via `ExecutionStore` adapters in `ows-runtime-stores`
+  (SQLite by default; PostgreSQL and Redis behind the `postgres`/`redis`
+  features).
+- OpenTelemetry integration crate (`ows-runtime-observability-otel`) that
+  exports lifecycle events over OTLP/HTTP JSON.
+- `listen` `foreach` iteration (and gathering multiple events for `all`).
+- Expanded CTK-style scenario coverage and docs.
+
+Remaining / future work:
+
+- Wiring a durable store into long-running execution *resume* (checkpoint and
+  restart) on top of the existing `ExecutionStore` trait.
+- Live CTK network scenarios and full correlation-group modelling for `listen`.
+- Native protobuf/HTTP-2 gRPC and broker-based AsyncAPI transports.
+- A full OpenTelemetry tracing/metrics SDK layer (spans, OTLP/gRPC).
 
 ## License
 

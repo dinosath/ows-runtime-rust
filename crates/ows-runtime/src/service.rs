@@ -697,6 +697,7 @@ async fn send_json_request(
 /// Parses an HTTP response into a structured JSON value following the same
 /// `output` modes (`content` / `response`) used by the HTTP function.
 #[cfg(feature = "http")]
+#[allow(clippy::too_many_arguments)]
 fn shape_response(
     uri: &str,
     method: &str,

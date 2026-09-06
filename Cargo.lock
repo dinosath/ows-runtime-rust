@@ -1480,7 +1480,9 @@ name = "ows-runtime-stores"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "ows-runtime",
  "ows-runtime-core",
+ "ows-runtime-dsl",
  "redis",
  "rusqlite",
  "serde",

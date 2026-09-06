@@ -70,7 +70,9 @@ non-network ones.
   execution's start record, terminal phase (running → completed/faulted/
   cancelled) and `workflow.started`/terminal lifecycle events through the
   configured store on every run (best-effort; store failures are logged, not
-  fatal). Full long-running *checkpoint/resume* is not yet implemented.
+  fatal). Full long-running *checkpoint/resume* is not yet implemented. A
+  durable-runtime integration test runs a workflow through `SqliteExecutionStore`
+  and reloads the persisted record (`all_records`) to prove it end to end.
 - `ows-runtime-observability-otel` exports lifecycle events to an
   OpenTelemetry collector over OTLP/HTTP JSON. A full tracing SDK (spans,
   metrics, OTLP/gRPC) can be layered on the `EventPublisher` trait.

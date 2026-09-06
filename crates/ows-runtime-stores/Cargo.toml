@@ -27,3 +27,7 @@ ows-runtime-core = { path = "../ows-runtime-core" }
 rusqlite = { version = "0.32", features = ["bundled"], optional = true }
 tokio-postgres = { version = "0.7", optional = true }
 redis = { version = "0.27", features = ["tokio-comp"], optional = true }
+
+[dev-dependencies]
+ows-runtime = { path = "../ows-runtime" }
+ows-runtime-dsl = { path = "../ows-runtime-dsl" }

@@ -73,6 +73,41 @@ impl SqliteExecutionStore {
         Self::init(conn)
     }
 
+    /// Returns every persisted execution record, ordered by start time then id.
+    pub async fn all_records(&self) -> Result<Vec<ExecutionRecord>, WorkflowError> {
+        let conn = self.conn.lock().await;
+        let mut stmt = conn
+            .prepare(
+                "SELECT execution_id, workflow, namespace, name, version, phase,
+                        context, pointer, error, started_at
+                 FROM executions ORDER BY started_at, execution_id",
+            )
+            .map_err(|e| db_error("all_records prepare", e))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, String>(2)?,
+                    row.get::<_, String>(3)?,
+                    row.get::<_, String>(4)?,
+                    row.get::<_, String>(5)?,
+                    row.get::<_, String>(6)?,
+                    row.get::<_, String>(7)?,
+                    row.get::<_, Option<String>>(8)?,
+                    row.get::<_, i64>(9)?,
+                ))
+            })
+            .map_err(|e| db_error("all_records", e))?;
+        let mut out = Vec::new();
+        for row in rows {
+            out.push(record_from_row(
+                row.map_err(|e| db_error("all_records row", e))?,
+            )?);
+        }
+        Ok(out)
+    }
+
     fn init(conn: Connection) -> Result<Self, WorkflowError> {
         conn.execute_batch(SCHEMA)
             .map_err(|e| db_error("schema", e))?;
@@ -80,6 +115,61 @@ impl SqliteExecutionStore {
             conn: Arc::new(Mutex::new(conn)),
         })
     }
+}
+
+/// A row of the `executions` table.
+type ExecutionRow = (
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    i64,
+);
+
+/// Decodes an `executions` row tuple into an [`ExecutionRecord`].
+fn record_from_row(row: ExecutionRow) -> Result<ExecutionRecord, WorkflowError> {
+    let (
+        execution_id,
+        workflow,
+        namespace,
+        name,
+        version,
+        phase,
+        context,
+        pointer,
+        error,
+        started_at,
+    ) = row;
+    let phase = match phase.as_str() {
+        "pending" => Phase::Pending,
+        "running" => Phase::Running,
+        "waiting" => Phase::Waiting,
+        "suspended" => Phase::Suspended,
+        "cancelled" => Phase::Cancelled,
+        "faulted" => Phase::Faulted,
+        "completed" => Phase::Completed,
+        other => return Err(db_error("load", format!("unknown phase `{other}`"))),
+    };
+    Ok(ExecutionRecord {
+        execution_id,
+        workflow,
+        namespace,
+        name,
+        version,
+        phase,
+        context: decode_json(&context)?,
+        pointer: decode_json(&pointer)?,
+        error: match error {
+            Some(e) => Some(decode_json(&e)?),
+            None => None,
+        },
+        started_at,
+    })
 }
 
 #[async_trait]

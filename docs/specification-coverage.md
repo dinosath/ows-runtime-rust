@@ -66,9 +66,11 @@ non-network ones.
 - Scheduling triggers are parsed; the runtime registers them via the
   `Scheduler` trait but does not yet fire periodic executions end-to-end.
 - `ows-runtime-stores` provides durable `ExecutionStore` backends (SQLite by
-  default; PostgreSQL and Redis behind features). The in-memory store remains
-  the engine default; wiring a durable store into long-running resume is
-  layered on the same trait.
+  default; PostgreSQL and Redis behind features). The engine now persists an
+  execution's start record, terminal phase (running → completed/faulted/
+  cancelled) and `workflow.started`/terminal lifecycle events through the
+  configured store on every run (best-effort; store failures are logged, not
+  fatal). Full long-running *checkpoint/resume* is not yet implemented.
 - `ows-runtime-observability-otel` exports lifecycle events to an
   OpenTelemetry collector over OTLP/HTTP JSON. A full tracing SDK (spans,
   metrics, OTLP/gRPC) can be layered on the `EventPublisher` trait.

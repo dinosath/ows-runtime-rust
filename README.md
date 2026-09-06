@@ -23,9 +23,10 @@ those are adapters behind stable core traits.
 - **Conformance**: the deterministic OWS CTK scenarios (12/12) pass. Network
   scenarios are skipped by default and can be enabled with `--include-network`.
 - **Durability & observability**: durable `ExecutionStore` adapters (SQLite,
-  PostgreSQL, Redis) live in `ows-runtime-stores`, and an OpenTelemetry
-  OTLP/HTTP JSON exporter for lifecycle events lives in
-  `ows-runtime-observability-otel`.
+  PostgreSQL, Redis) live in `ows-runtime-stores`, and the engine persists each
+  execution's start record, terminal phase and lifecycle events through the
+  configured store. An OpenTelemetry OTLP/HTTP JSON exporter for lifecycle
+  events lives in `ows-runtime-observability-otel`.
 - **Experimental / opt-in transports**: the gRPC adapter targets gRPC services
   exposed through a JSON/gateway endpoint, and the AsyncAPI adapter publishes
   over an HTTP channel binding (no protobuf codegen or broker adapters are

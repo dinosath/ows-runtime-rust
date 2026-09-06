@@ -12,7 +12,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ows_runtime_core::{
-    ErrorKind, ExpressionContext, ProblemDetails, StandardErrorType, WorkflowError,
+    ErrorKind, ExecutionRecord, ExpressionContext, Phase, ProblemDetails, StandardErrorType,
+    StoredEvent, WorkflowError,
 };
 use serde_json::{json, Map, Value};
 use tokio::sync::Mutex;
@@ -171,31 +172,157 @@ pub(crate) async fn execute(
     // Set the initial context and first task input.
     ctx.set_context(transformed_input.clone()).await;
 
-    // 2. Execute the top-level scope.
-    let scope_output = exec_scope(
-        &inner,
-        &workflow,
-        &workflow.tasks,
-        &mut ctx,
-        &transformed_input,
-    )
-    .await?;
+    // Record the start of the execution in the durable store (best-effort).
+    persist_started(&inner, &workflow, &ctx, &execution_id, started_at).await;
 
-    // 3. Transform + validate workflow output.
-    let output = apply_workflow_output(&inner, &workflow, &ctx, scope_output).await?;
-
-    tracing::info!(execution.id = %execution_id, "workflow.completed");
-    inner
-        .lifecycle()
-        .workflow_completed(
-            &wf_ref,
-            &execution_id,
-            &iso_time(inner.clock.epoch_seconds()),
+    // 2. Execute the top-level scope, then transform + validate output. Faults
+    //    are captured so the durable store records the terminal phase.
+    let outcome = async {
+        let scope_output = exec_scope(
+            &inner,
+            &workflow,
+            &workflow.tasks,
+            &mut ctx,
+            &transformed_input,
         )
-        .await
-        .ok();
+        .await?;
+        apply_workflow_output(&inner, &workflow, &ctx, scope_output).await
+    }
+    .await;
 
-    Ok(output)
+    match &outcome {
+        Ok(_) => {
+            tracing::info!(execution.id = %execution_id, "workflow.completed");
+            inner
+                .lifecycle()
+                .workflow_completed(
+                    &wf_ref,
+                    &execution_id,
+                    &iso_time(inner.clock.epoch_seconds()),
+                )
+                .await
+                .ok();
+            persist_terminal(
+                &inner,
+                &workflow,
+                &ctx,
+                &execution_id,
+                Phase::Completed,
+                None,
+                started_at,
+            )
+            .await;
+        }
+        Err(err) => {
+            let phase = if err.kind == ErrorKind::Cancelled {
+                Phase::Cancelled
+            } else {
+                Phase::Faulted
+            };
+            persist_terminal(
+                &inner,
+                &workflow,
+                &ctx,
+                &execution_id,
+                phase,
+                Some(err),
+                started_at,
+            )
+            .await;
+        }
+    }
+
+    outcome
+}
+
+/// Builds an [`ExecutionRecord`] snapshot of the current execution state.
+fn execution_record(
+    workflow: &Arc<CompiledWorkflow>,
+    ctx: &ExecContext,
+    execution_id: &str,
+    phase: Phase,
+    error: Option<Value>,
+    started_at: i64,
+) -> ExecutionRecord {
+    ExecutionRecord {
+        execution_id: execution_id.to_string(),
+        workflow: workflow.id.key(),
+        namespace: workflow.id.namespace.clone(),
+        name: workflow.id.name.clone(),
+        version: workflow.id.version.clone(),
+        phase,
+        context: ctx.context_value_sync(),
+        pointer: Value::Null,
+        error,
+        started_at,
+    }
+}
+
+/// Persists the execution's start record and a `workflow.started` event.
+async fn persist_started(
+    inner: &Arc<RuntimeInner>,
+    workflow: &Arc<CompiledWorkflow>,
+    ctx: &ExecContext,
+    execution_id: &str,
+    started_at: i64,
+) {
+    let record = execution_record(
+        workflow,
+        ctx,
+        execution_id,
+        Phase::Running,
+        None,
+        started_at,
+    );
+    if let Err(e) = inner.store.create(record).await {
+        tracing::warn!(execution.id = %execution_id, error = %e, "failed to persist execution start");
+    }
+    let event = StoredEvent {
+        execution_id: execution_id.to_string(),
+        sequence: 1,
+        event_type: "workflow.started".into(),
+        payload: json!({ "startedAt": started_at }),
+        timestamp: started_at,
+    };
+    if let Err(e) = inner.store.append_event(event).await {
+        tracing::warn!(execution.id = %execution_id, error = %e, "failed to persist workflow.started event");
+    }
+}
+
+/// Persists the terminal phase of an execution and its terminal event.
+async fn persist_terminal(
+    inner: &Arc<RuntimeInner>,
+    workflow: &Arc<CompiledWorkflow>,
+    ctx: &ExecContext,
+    execution_id: &str,
+    phase: Phase,
+    error: Option<&WorkflowError>,
+    started_at: i64,
+) {
+    let error_value = error.map(|e| e.to_problem_json());
+    let record = execution_record(workflow, ctx, execution_id, phase, error_value, started_at);
+    if let Err(e) = inner.store.update(&record).await {
+        tracing::warn!(execution.id = %execution_id, error = %e, "failed to persist execution terminal phase");
+    }
+
+    let event_type = match phase {
+        Phase::Completed => "workflow.completed",
+        Phase::Cancelled => "workflow.cancelled",
+        _ => "workflow.faulted",
+    };
+    let timestamp = inner.clock.epoch_seconds();
+    let event = StoredEvent {
+        execution_id: execution_id.to_string(),
+        sequence: 2,
+        event_type: event_type.into(),
+        payload: error
+            .map(|e| e.to_problem_json())
+            .unwrap_or_else(|| json!({ "completedAt": timestamp })),
+        timestamp,
+    };
+    if let Err(e) = inner.store.append_event(event).await {
+        tracing::warn!(execution.id = %execution_id, error = %e, "failed to persist terminal event");
+    }
 }
 
 /// Applies workflow `input.from` and validation.

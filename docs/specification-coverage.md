@@ -23,7 +23,7 @@ non-network ones.
 | `Try` task (catch, retry, do) | Try | ✅ | ✅ | ✅ | ✅ | |
 | `Raise` task | Raise | ✅ | ✅ | ✅ | ✅ | |
 | `Emit` task | Emit | ✅ | ✅ | ✅ | ✅ | |
-| `Listen` task | Listen | ✅ | ✅ | ✅ | 🚧 | `one`/`any`/`all` plus `foreach` iteration |
+| `Listen` task | Listen | ✅ | ✅ | ✅ | 🚧 | `one`/`any`/`all`, `foreach`, correlation `from`/`expect` |
 | `Wait` task | Wait | ✅ | ✅ | ✅ | ✅ | |
 | `Call` task — HTTP | Call/HTTP | ✅ | ✅ | ✅ | 🚧 | network scenarios skip by default |
 | `Call` task — OpenAPI | Call/OpenAPI | ✅ | ✅ | ✅ | 🚧 | network |
@@ -61,8 +61,10 @@ non-network ones.
   AsyncAPI require transport adapters and are opt-in.
 - `run` container/script/shell require a `ProcessRunner` adapter and are
   deny-by-default.
-- `listen` `all` consumes one event per filter (correlation groups beyond a
-  single `from`/`expect` key are not fully modelled).
+- `listen` filters support `correlate` `from`/`expect` matching (an event only
+  satisfies a filter when its extracted correlation value equals `expect`);
+  full cross-event correlation *grouping* (first-seen values, multi-key groups)
+  is not yet modelled.
 - Scheduling triggers are parsed; the runtime registers them via the
   `Scheduler` trait but does not yet fire periodic executions end-to-end.
 - `ows-runtime-stores` provides durable `ExecutionStore` backends (SQLite by
@@ -74,5 +76,6 @@ non-network ones.
   durable-runtime integration test runs a workflow through `SqliteExecutionStore`
   and reloads the persisted record (`all_records`) to prove it end to end.
 - `ows-runtime-observability-otel` exports lifecycle events to an
-  OpenTelemetry collector over OTLP/HTTP JSON. A full tracing SDK (spans,
-  metrics, OTLP/gRPC) can be layered on the `EventPublisher` trait.
+  OpenTelemetry collector over OTLP/HTTP JSON, verified end to end against a
+  loopback OTLP/HTTP collector. A full tracing SDK (spans, metrics, OTLP/gRPC)
+  can be layered on the `EventPublisher` trait.

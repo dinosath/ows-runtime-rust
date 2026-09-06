@@ -188,7 +188,8 @@ Remaining / future work:
 
 - Wiring a durable store into long-running execution *resume* (checkpoint and
   restart) on top of the existing `ExecutionStore` trait.
-- Live CTK network scenarios and full correlation-group modelling for `listen`.
+- Live CTK network scenarios; full cross-event correlation *grouping* for
+  `listen` (single `from`/`expect` matching is implemented).
 - Native protobuf/HTTP-2 gRPC and broker-based AsyncAPI transports.
 - A full OpenTelemetry tracing/metrics SDK layer (spans, OTLP/gRPC).
 

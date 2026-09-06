@@ -989,9 +989,9 @@ fn values_equal(a: &Value, b: &Value) -> bool {
 }
 
 fn build_matcher(
-    _inner: &Arc<RuntimeInner>,
+    inner: &Arc<RuntimeInner>,
     filter: &EventFilterDef,
-    _expr_ctx: &ExpressionContext,
+    expr_ctx: &ExpressionContext,
 ) -> Result<ows_runtime_events::EventMatcher, WorkflowError> {
     use ows_runtime_events::{EventMatcher, FieldConstraint};
     let mut matcher = EventMatcher::new();
@@ -1012,7 +1012,51 @@ fn build_matcher(
                 .push((key.clone(), FieldConstraint::Equals(expected.clone()))),
         }
     }
+    // Correlation: when a filter declares a `correlate` key with an `expect`,
+    // only events whose `from`-extracted value equals the expected value are
+    // correlated (and thus may satisfy the filter).
+    let vars = expr_ctx.as_variable_map();
+    for corr in &filter.correlate {
+        if let Some(expect) = &corr.expect {
+            let from = corr.from.clone();
+            let expect = expect.clone();
+            let vars = vars.clone();
+            let inner = inner.clone();
+            matcher.attributes.push((
+                "correlate".to_string(),
+                FieldConstraint::Expression(Box::new(move |ce| {
+                    correlation_matches(&inner, &from, &expect, &vars, ce)
+                })),
+            ));
+        }
+    }
     Ok(matcher)
+}
+
+/// Evaluates a correlation key: whether the `from`-extracted value of an event
+/// equals the `expect` expression. Used to correlate the events of a `listen`.
+fn correlation_matches(
+    inner: &Arc<RuntimeInner>,
+    from: &str,
+    expect: &str,
+    vars: &Map<String, Value>,
+    event: &ows_runtime_events::CloudEvent,
+) -> bool {
+    let input = event.data.clone().unwrap_or(Value::Null);
+    let got = inner
+        .expression
+        .compile(from)
+        .and_then(|c| inner.expression.evaluate(&c, &input, vars))
+        .ok();
+    let want = inner
+        .expression
+        .compile(expect)
+        .and_then(|c| inner.expression.evaluate(&c, &input, vars))
+        .ok();
+    match (got, want) {
+        (Some(g), Some(w)) => values_equal(&g, &w),
+        _ => false,
+    }
 }
 
 fn build_matchers(

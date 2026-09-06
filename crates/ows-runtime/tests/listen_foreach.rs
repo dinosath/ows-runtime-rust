@@ -107,3 +107,37 @@ do:
     assert_eq!(arr[0]["got"], json!(1));
     assert_eq!(arr[1]["got"], json!(2));
 }
+
+#[tokio::test]
+async fn listen_correlates_events_by_expect() {
+    let yaml = r#"
+document:
+  dsl: '1.0.3'
+  namespace: default
+  name: listen-correlate
+  version: '1.0.0'
+do:
+  - waitOrder:
+      listen:
+        to:
+          one:
+            with:
+              type: com.example.order
+            correlate:
+              orderId:
+                from: '.orderId'
+                expect: '"abc"'
+"#;
+    // Publish an event that matches the type but not the correlation key first,
+    // then the correlated event. The listener must ignore the first and only
+    // consume the one whose correlation key equals the expected value.
+    let out = run_listen(
+        yaml,
+        vec![
+            ("com.example.order", json!({"orderId": "xyz"})),
+            ("com.example.order", json!({"orderId": "abc"})),
+        ],
+    )
+    .await;
+    assert_eq!(out, json!([{ "orderId": "abc" }]));
+}

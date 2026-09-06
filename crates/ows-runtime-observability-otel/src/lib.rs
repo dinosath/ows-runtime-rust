@@ -125,6 +125,9 @@ pub fn encode_log_request(event: &EventMessage, service_name: &str) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    use tokio::net::TcpListener;
 
     fn event() -> EventMessage {
         let mut e = EventMessage::new(
@@ -158,5 +161,54 @@ mod tests {
         assert_eq!(p.endpoint(), DEFAULT_OTLP_LOGS_ENDPOINT);
         // No live collector is required for construction/encoding.
         let _ = encode_log_request(&event(), "svc");
+    }
+
+    /// Serves a single OTLP/HTTP request, capturing the JSON body.
+    async fn serve_collector(captured: Arc<Mutex<Vec<u8>>>) -> std::net::SocketAddr {
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut head = Vec::new();
+            let mut byte = [0u8; 1];
+            loop {
+                if sock.read(&mut byte).await.unwrap_or(0) == 0 {
+                    break;
+                }
+                head.push(byte[0]);
+                if head.windows(4).any(|w| w == b"\r\n\r\n") {
+                    break;
+                }
+            }
+            let text = String::from_utf8_lossy(&head);
+            let len = text
+                .lines()
+                .find_map(|l| {
+                    let lower = l.to_ascii_lowercase();
+                    lower
+                        .strip_prefix("content-length:")
+                        .and_then(|v| v.trim().parse::<usize>().ok())
+                })
+                .unwrap_or(0);
+            let mut body = vec![0u8; len];
+            let _ = sock.read_exact(&mut body).await;
+            *captured.lock().unwrap() = body;
+            let resp = "HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
+            let _ = sock.write_all(resp.as_bytes()).await;
+        });
+        addr
+    }
+
+    #[tokio::test]
+    async fn publishes_otlp_json_to_collector() {
+        let captured = Arc::new(Mutex::new(Vec::new()));
+        let addr = serve_collector(captured.clone()).await;
+        let publisher = OpenTelemetryLogsPublisher::new(format!("http://{addr}/v1/logs"), "svc");
+        publisher.publish(&event()).await.unwrap();
+
+        let body: Value = serde_json::from_slice(&captured.lock().unwrap()).unwrap();
+        let record = &body["resourceLogs"][0]["scopeLogs"][0]["logRecords"][0];
+        assert_eq!(record["body"]["stringValue"], event().type_);
+        assert_eq!(record["timeUnixNano"], "1704067200000000000");
     }
 }

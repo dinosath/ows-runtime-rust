@@ -178,9 +178,10 @@ Roadmap items implemented:
 - OpenTelemetry integration crate (`ows-runtime-observability-otel`) that
   exports lifecycle events over OTLP/HTTP JSON.
 - `listen` `foreach` iteration (and gathering multiple events for `all`).
-- New scenario coverage for `listen` `foreach`/`all` and for the gRPC,
-  AsyncAPI, A2A and MCP call functions (offline, deterministic tests); these
-  enable the corresponding OWS CTK scenarios to run.
+- New scenario coverage: offline, deterministic tests for `listen` `foreach`/`all`
+  and the gRPC/AsyncAPI/A2A/MCP call functions, plus an in-repo self-hosted
+  Gherkin conformance suite (`set`/`for`/`fork`/`switch`) that runs through the
+  same CTK runner in normal CI (see [`docs/conformance.md`](docs/conformance.md)).
 
 Remaining / future work:
 

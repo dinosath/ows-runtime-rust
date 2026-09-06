@@ -55,6 +55,17 @@ When `--include-network` is passed they are executed against the live endpoints,
 which is inherently non-deterministic (the live services' data changes over
 time).
 
+## In-repo self-hosted scenarios
+
+The official CTK lives in the specification repository and is not vendored, so
+the `deterministic_ctk_scenarios_pass` test is skipped when no checkout is
+present. To keep conformance coverage meaningful in offline CI,
+`crates/ows-runtime-cli/tests/features/` contains a small deterministic Gherkin
+suite (`set`, `for`, `fork`, `switch`). The
+`self_hosted_deterministic_scenarios_pass` test runs it through the same
+Gherkin runner, guarding the runner and the runtime's deterministic task
+semantics without any external dependency.
+
 ## Report format
 
 The report is serialized to JSON:

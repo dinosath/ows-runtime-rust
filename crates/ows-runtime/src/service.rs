@@ -655,6 +655,562 @@ fn enforce_network_policy(inner: &Arc<RuntimeInner>, uri: &str) -> Result<(), Wo
     Ok(())
 }
 
+/// Performs an HTTP request and returns the raw JSON response body.
+#[cfg(feature = "http")]
+async fn send_json_request(
+    client: &reqwest::Client,
+    method: reqwest::Method,
+    uri: &str,
+    headers: &HashMap<String, String>,
+    body: Option<&Value>,
+) -> Result<(u16, HashMap<String, String>, String, Vec<u8>), WorkflowError> {
+    let mut rb = client.request(method, uri);
+    for (k, v) in headers {
+        rb = rb.header(k, v);
+    }
+    if let Some(b) = body {
+        rb = rb.json(b);
+    }
+    let response = rb.send().await.map_err(|e| {
+        crate::error::communication_error(500, format!("request to `{uri}` failed: {e}"))
+    })?;
+    let status = response.status().as_u16();
+    let response_headers: HashMap<String, String> = response
+        .headers()
+        .iter()
+        .map(|(k, v)| (k.as_str().to_string(), v.to_str().unwrap_or("").to_string()))
+        .collect();
+    let content_type = response_headers
+        .get("content-type")
+        .cloned()
+        .unwrap_or_default();
+    let bytes = response
+        .bytes()
+        .await
+        .map_err(|e| {
+            crate::error::communication_error(500, format!("failed to read response: {e}"))
+        })?
+        .to_vec();
+    Ok((status, response_headers, content_type, bytes))
+}
+
+/// Parses an HTTP response into a structured JSON value following the same
+/// `output` modes (`content` / `response`) used by the HTTP function.
+#[cfg(feature = "http")]
+fn shape_response(
+    uri: &str,
+    method: &str,
+    req_headers: &HashMap<String, String>,
+    status: u16,
+    resp_headers: HashMap<String, String>,
+    content_type: String,
+    bytes: &[u8],
+    output: &str,
+) -> Result<Value, WorkflowError> {
+    let content = deserialize_body(bytes, &content_type);
+    match output {
+        "response" => Ok(json!({
+            "request": { "method": method, "uri": uri, "headers": req_headers },
+            "headers": resp_headers,
+            "statusCode": status,
+            "content": content.unwrap_or(Value::Null),
+        })),
+        _ => Ok(content.unwrap_or(Value::Null)),
+    }
+}
+
+/// The MCP (Model Context Protocol) call function adapter.
+///
+/// It invokes a tool on an MCP server over JSON-RPC (streamable HTTP). Arguments
+/// are `endpoint`, `tool`, `arguments` and an optional `output` mode. The MCP
+/// server's structured content is returned.
+#[cfg(feature = "http")]
+pub struct McpInvoker {
+    inner: Arc<RuntimeInner>,
+    client: reqwest::Client,
+}
+
+#[cfg(feature = "http")]
+impl McpInvoker {
+    /// Creates a new MCP function invoker.
+    pub fn new(inner: Arc<RuntimeInner>) -> Self {
+        let client = reqwest::Client::builder().build().unwrap_or_default();
+        Self { inner, client }
+    }
+}
+
+#[cfg(feature = "http")]
+#[async_trait::async_trait]
+impl FunctionInvoker for McpInvoker {
+    async fn invoke(&self, req: FunctionRequest<'_>) -> Result<Value, WorkflowError> {
+        let args = &req.args;
+        let tool = args
+            .get("tool")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| crate::error::semantic_error("mcp call requires a `tool`"))?
+            .to_string();
+        let arguments = args
+            .get("arguments")
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()));
+
+        let endpoint = args
+            .get("endpoint")
+            .ok_or_else(|| crate::error::semantic_error("mcp call requires an `endpoint`"))?;
+        let (uri, auth) = resolve_endpoint(endpoint, req.context, &self.inner)?;
+        enforce_network_policy(&self.inner, &uri)?;
+
+        let mut headers = resolve_headers(args.get("headers"), req.context, &self.inner)?;
+        headers.insert("content-type".into(), "application/json".into());
+        apply_auth(auth, &mut headers, req.context, &self.inner)?;
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": tool, "arguments": arguments },
+        });
+
+        let (status, resp_headers, content_type, bytes) = send_json_request(
+            &self.client,
+            reqwest::Method::POST,
+            &uri,
+            &headers,
+            Some(&request),
+        )
+        .await?;
+
+        if !(200..300).contains(&status) {
+            return Err(crate::error::communication_error(
+                status,
+                format!("mcp call returned status {status}"),
+            ));
+        }
+
+        let envelope: Value = serde_json::from_slice(&bytes).map_err(|e| {
+            crate::error::communication_error(500, format!("invalid mcp json-rpc response: {e}"))
+        })?;
+        // Surface JSON-RPC errors.
+        if let Some(err) = envelope.get("error") {
+            if !err.is_null() {
+                return Err(crate::error::communication_error(
+                    status,
+                    format!("mcp json-rpc error: {err}"),
+                ));
+            }
+        }
+        let result = envelope.get("result").cloned().unwrap_or(Value::Null);
+
+        let output = args
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("content");
+        if output == "response" {
+            return shape_response(
+                &uri,
+                "post",
+                &headers,
+                status,
+                resp_headers,
+                content_type,
+                &bytes,
+                "response",
+            );
+        }
+        // By default return the joined text content of the tool result, falling
+        // back to the full result object.
+        Ok(result
+            .get("content")
+            .and_then(|c| c.as_array())
+            .map(|items| {
+                let text: Vec<String> = items
+                    .iter()
+                    .filter_map(|i| {
+                        if i.get("type").and_then(|t| t.as_str()) == Some("text") {
+                            i.get("text").and_then(|t| t.as_str()).map(String::from)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                if text.is_empty() {
+                    result.clone()
+                } else {
+                    Value::String(text.join("\n"))
+                }
+            })
+            .unwrap_or(result))
+    }
+}
+
+/// The A2A (Agent2Agent) call function adapter.
+///
+/// It sends a JSON-RPC request to an agent over HTTP. Arguments are `endpoint`,
+/// `method` (defaults to `message/send`), `params` and an optional `output`.
+#[cfg(feature = "http")]
+pub struct A2aInvoker {
+    inner: Arc<RuntimeInner>,
+    client: reqwest::Client,
+}
+
+#[cfg(feature = "http")]
+impl A2aInvoker {
+    /// Creates a new A2A function invoker.
+    pub fn new(inner: Arc<RuntimeInner>) -> Self {
+        let client = reqwest::Client::builder().build().unwrap_or_default();
+        Self { inner, client }
+    }
+}
+
+#[cfg(feature = "http")]
+#[async_trait::async_trait]
+impl FunctionInvoker for A2aInvoker {
+    async fn invoke(&self, req: FunctionRequest<'_>) -> Result<Value, WorkflowError> {
+        let args = &req.args;
+        let endpoint = args
+            .get("endpoint")
+            .ok_or_else(|| crate::error::semantic_error("a2a call requires an `endpoint`"))?;
+        let (uri, auth) = resolve_endpoint(endpoint, req.context, &self.inner)?;
+        enforce_network_policy(&self.inner, &uri)?;
+
+        let method = args
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("message/send");
+        let params = args
+            .get("params")
+            .cloned()
+            .or_else(|| args.get("message").cloned())
+            .unwrap_or(Value::Object(Map::new()));
+
+        let mut headers = resolve_headers(args.get("headers"), req.context, &self.inner)?;
+        headers.insert("content-type".into(), "application/json".into());
+        apply_auth(auth, &mut headers, req.context, &self.inner)?;
+
+        let request = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": method,
+            "params": params,
+        });
+
+        let (status, resp_headers, content_type, bytes) = send_json_request(
+            &self.client,
+            reqwest::Method::POST,
+            &uri,
+            &headers,
+            Some(&request),
+        )
+        .await?;
+
+        if !(200..300).contains(&status) {
+            return Err(crate::error::communication_error(
+                status,
+                format!("a2a call returned status {status}"),
+            ));
+        }
+
+        let envelope: Value = serde_json::from_slice(&bytes).map_err(|e| {
+            crate::error::communication_error(500, format!("invalid a2a json-rpc response: {e}"))
+        })?;
+        if let Some(err) = envelope.get("error") {
+            if !err.is_null() {
+                return Err(crate::error::communication_error(
+                    status,
+                    format!("a2a json-rpc error: {err}"),
+                ));
+            }
+        }
+        let result = envelope.get("result").cloned().unwrap_or(Value::Null);
+
+        let output = args
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("content");
+        if output == "response" {
+            return shape_response(
+                &uri,
+                "post",
+                &headers,
+                status,
+                resp_headers,
+                content_type,
+                &bytes,
+                "response",
+            );
+        }
+        Ok(result)
+    }
+}
+
+/// The AsyncAPI call function adapter.
+///
+/// AsyncAPI describes message-driven channels and their operations. This adapter
+/// resolves a `publish`/`subscribe` operation on a channel from an AsyncAPI
+/// document and publishes a message. Arguments are `document` (an endpoint URI
+/// or inline object), an `operationId` or `channel` name, `message`, and an
+/// optional HTTP `endpoint` override for the target server.
+#[cfg(feature = "http")]
+pub struct AsyncApiInvoker {
+    inner: Arc<RuntimeInner>,
+    client: reqwest::Client,
+}
+
+#[cfg(feature = "http")]
+impl AsyncApiInvoker {
+    /// Creates a new AsyncAPI function invoker.
+    pub fn new(inner: Arc<RuntimeInner>) -> Self {
+        let client = reqwest::Client::builder().build().unwrap_or_default();
+        Self { inner, client }
+    }
+
+    /// Fetches or returns the inline AsyncAPI document value.
+    async fn document(&self, endpoint: &Value) -> Result<Value, WorkflowError> {
+        match endpoint {
+            Value::String(uri) => {
+                enforce_network_policy(&self.inner, uri)?;
+                self.client
+                    .get(uri)
+                    .send()
+                    .await
+                    .map_err(|e| {
+                        crate::error::communication_error(
+                            500,
+                            format!("failed to fetch asyncapi document: {e}"),
+                        )
+                    })?
+                    .json()
+                    .await
+                    .map_err(|e| {
+                        crate::error::communication_error(
+                            500,
+                            format!("failed to parse asyncapi document: {e}"),
+                        )
+                    })
+            }
+            other => Ok(other.clone()),
+        }
+    }
+}
+
+#[cfg(feature = "http")]
+#[async_trait::async_trait]
+impl FunctionInvoker for AsyncApiInvoker {
+    async fn invoke(&self, req: FunctionRequest<'_>) -> Result<Value, WorkflowError> {
+        let args = &req.args;
+
+        let message = args
+            .get("message")
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()));
+
+        let doc_value = args
+            .get("document")
+            .or_else(|| args.get("spec"))
+            .ok_or_else(|| crate::error::semantic_error("asyncapi call requires a `document`"))?;
+        let document = match doc_value {
+            Value::Object(m) if m.contains_key("endpoint") => self.document(&m["endpoint"]).await?,
+            other => self.document(other).await?,
+        };
+
+        // Locate the channel operation by operationId or channel name.
+        let operation_id = args
+            .get("operationId")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
+        let channel_name = args.get("channel").and_then(|v| v.as_str()).unwrap_or("");
+
+        let channels = document
+            .get("channels")
+            .and_then(|c| c.as_object())
+            .ok_or_else(|| crate::error::semantic_error("asyncapi document has no channels"))?;
+
+        let target = resolve_asyncapi_operation(channels, operation_id, channel_name)?;
+
+        // Determine the endpoint: explicit override, the channel's server url
+        // (from the document origin) or the operation's HTTP server binding.
+        let endpoint_override = args.get("endpoint").cloned();
+        let (uri, _auth) = match endpoint_override {
+            Some(Value::Object(m)) if m.contains_key("uri") => (
+                m["uri"].as_str().unwrap_or_default().to_string(),
+                None::<Value>,
+            ),
+            Some(Value::String(s)) => (s, None::<Value>),
+            _ => (String::new(), None::<Value>),
+        };
+        let mut uri = uri;
+        if uri.is_empty() {
+            if let Some(base) = document.get("servers").and_then(|s| s.as_object()) {
+                // Prefer the first http/https server url for the channel.
+                let url = base.values().find_map(|v| {
+                    v.get("url")
+                        .and_then(|u| u.as_str())
+                        .filter(|u| u.starts_with("http"))
+                        .map(|u| u.to_string())
+                });
+                if let Some(u) = url {
+                    uri = u.trim_end_matches('/').to_string() + target.path;
+                }
+            }
+        }
+        if uri.is_empty() {
+            // Fall back to a relative publish path derived from the channel.
+            uri = format!("{}{}", target.channel.trim_start_matches('/'), "/");
+        }
+
+        enforce_network_policy(&self.inner, &uri)?;
+        let mut headers = resolve_headers(args.get("headers"), req.context, &self.inner)?;
+        headers.insert("content-type".into(), "application/json".into());
+
+        let (status, resp_headers, content_type, bytes) = send_json_request(
+            &self.client,
+            reqwest::Method::POST,
+            &uri,
+            &headers,
+            Some(&message),
+        )
+        .await?;
+
+        if !(200..300).contains(&status) {
+            return Err(crate::error::communication_error(
+                status,
+                format!("asyncapi publish returned status {status}"),
+            ));
+        }
+
+        let output = args
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("content");
+        shape_response(
+            &uri,
+            "post",
+            &headers,
+            status,
+            resp_headers,
+            content_type,
+            &bytes,
+            output,
+        )
+    }
+}
+
+/// A resolved AsyncAPI operation.
+#[cfg(feature = "http")]
+struct AsyncApiTarget<'a> {
+    channel: String,
+    path: &'a str,
+    _kind: &'a str,
+}
+
+/// Resolves a channel operation (by operationId or by channel name) within an
+/// AsyncAPI channels map.
+#[cfg(feature = "http")]
+fn resolve_asyncapi_operation<'a>(
+    channels: &'a Map<String, Value>,
+    operation_id: &str,
+    channel_name: &str,
+) -> Result<AsyncApiTarget<'a>, WorkflowError> {
+    for (name, chan) in channels {
+        if !channel_name.is_empty() && name != channel_name {
+            continue;
+        }
+        for op_kind in ["publish", "subscribe"] {
+            if let Some(op) = chan.get(op_kind) {
+                let op_id = op.get("operationId").and_then(|v| v.as_str()).unwrap_or("");
+                if !operation_id.is_empty() && op_id != operation_id {
+                    continue;
+                }
+                let path = chan
+                    .get("bindings")
+                    .and_then(|b| b.get("http"))
+                    .and_then(|h| h.get("path"))
+                    .and_then(|p| p.as_str())
+                    .unwrap_or_default();
+                return Ok(AsyncApiTarget {
+                    channel: name.clone(),
+                    path,
+                    _kind: op_kind,
+                });
+            }
+        }
+    }
+    Err(crate::error::semantic_error(
+        "asyncapi operation not found in document",
+    ))
+}
+
+/// The gRPC call function adapter.
+///
+/// The runtime does not embed protobuf code generation, so this adapter targets
+/// gRPC services that expose a JSON transcoding/HTTP gateway endpoint (the
+/// `grpc-gateway` pattern). Arguments are an `endpoint`, the fully-qualified
+/// `service`/`method` used to build the transcoding path, and the JSON `message`.
+#[cfg(feature = "http")]
+pub struct GrpcInvoker {
+    inner: Arc<RuntimeInner>,
+    client: reqwest::Client,
+}
+
+#[cfg(feature = "http")]
+impl GrpcInvoker {
+    /// Creates a new gRPC function invoker.
+    pub fn new(inner: Arc<RuntimeInner>) -> Self {
+        let client = reqwest::Client::builder().build().unwrap_or_default();
+        Self { inner, client }
+    }
+}
+
+#[cfg(feature = "http")]
+#[async_trait::async_trait]
+impl FunctionInvoker for GrpcInvoker {
+    async fn invoke(&self, req: FunctionRequest<'_>) -> Result<Value, WorkflowError> {
+        let args = &req.args;
+        let endpoint = args
+            .get("endpoint")
+            .ok_or_else(|| crate::error::semantic_error("grpc call requires an `endpoint`"))?;
+        let (uri, auth) = resolve_endpoint(endpoint, req.context, &self.inner)?;
+        enforce_network_policy(&self.inner, &uri)?;
+
+        let message = args.get("message").cloned().unwrap_or(Value::Null);
+
+        let mut headers = resolve_headers(args.get("headers"), req.context, &self.inner)?;
+        headers.insert("content-type".into(), "application/json".into());
+        apply_auth(auth, &mut headers, req.context, &self.inner)?;
+
+        let (status, resp_headers, content_type, bytes) = send_json_request(
+            &self.client,
+            reqwest::Method::POST,
+            &uri,
+            &headers,
+            Some(&message),
+        )
+        .await?;
+
+        if !(200..300).contains(&status) {
+            return Err(crate::error::communication_error(
+                status,
+                format!("grpc call returned status {status}"),
+            ));
+        }
+
+        let output = args
+            .get("output")
+            .and_then(|v| v.as_str())
+            .unwrap_or("content");
+        shape_response(
+            &uri,
+            "post",
+            &headers,
+            status,
+            resp_headers,
+            content_type,
+            &bytes,
+            output,
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

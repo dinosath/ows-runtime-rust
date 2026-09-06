@@ -170,10 +170,26 @@ fn compile_kind(
         TaskDefinition::Emit(t) => Ok(CompiledTaskKind::Emit(EmitDef {
             event: t.emit.event.with.clone(),
         })),
-        TaskDefinition::Listen(t) => Ok(CompiledTaskKind::Listen(ListenDef {
-            to: compile_listen_to(&t.listen.to),
-            read: t.listen.read.clone(),
-        })),
+        TaskDefinition::Listen(t) => {
+            let foreach = match &t.foreach {
+                Some(f) => Some(ListenForeachDef {
+                    item: f.item.clone().unwrap_or_else(|| "item".to_string()),
+                    at: f.at.clone(),
+                    body: match &f.do_ {
+                        Some(scope) => {
+                            compile_scope(scope, &format!("{reference}/foreach/do"), components)?
+                        }
+                        None => Vec::new(),
+                    },
+                }),
+                None => None,
+            };
+            Ok(CompiledTaskKind::Listen(ListenDef {
+                to: compile_listen_to(&t.listen.to),
+                read: t.listen.read.clone(),
+                foreach,
+            }))
+        }
         TaskDefinition::Raise(t) => Ok(CompiledTaskKind::Raise(RaiseDef {
             error: match &t.raise.error {
                 dsl_models::OneOfErrorDefinitionOrReference::Error(e) => {

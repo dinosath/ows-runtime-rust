@@ -15,9 +15,11 @@ use tokio::sync::{oneshot, Notify};
 use crate::compile;
 use crate::engine;
 use crate::ir::CompiledWorkflow;
-use crate::service::{FunctionInvoker, NoopProcessRunner, NoopServiceInvoker};
 #[cfg(feature = "http")]
-use crate::service::{HttpServiceInvoker, OpenApiInvoker};
+use crate::service::{
+    A2aInvoker, AsyncApiInvoker, GrpcInvoker, HttpServiceInvoker, McpInvoker, OpenApiInvoker,
+};
+use crate::service::{FunctionInvoker, NoopProcessRunner, NoopServiceInvoker};
 
 /// Shared services backing all executions of a [`Runtime`].
 pub struct RuntimeInner {
@@ -437,6 +439,24 @@ impl RuntimeBuilder {
                 functions.insert(
                     "openapi".to_string(),
                     Arc::new(OpenApiInvoker::new(inner.clone())),
+                );
+            }
+            if !functions.contains_key("mcp") {
+                functions.insert("mcp".to_string(), Arc::new(McpInvoker::new(inner.clone())));
+            }
+            if !functions.contains_key("a2a") {
+                functions.insert("a2a".to_string(), Arc::new(A2aInvoker::new(inner.clone())));
+            }
+            if !functions.contains_key("asyncapi") {
+                functions.insert(
+                    "asyncapi".to_string(),
+                    Arc::new(AsyncApiInvoker::new(inner.clone())),
+                );
+            }
+            if !functions.contains_key("grpc") {
+                functions.insert(
+                    "grpc".to_string(),
+                    Arc::new(GrpcInvoker::new(inner.clone())),
                 );
             }
             drop(functions);

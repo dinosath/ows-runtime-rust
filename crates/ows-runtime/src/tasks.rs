@@ -57,7 +57,7 @@ pub(crate) async fn dispatch(
             task_try(inner, workflow, d, task_input, expr_ctx, exec_ctx).await?
         }
         CompiledTaskKind::Emit(d) => task_emit(inner, workflow, d, expr_ctx).await?,
-        CompiledTaskKind::Listen(d) => task_listen(inner, d, expr_ctx, exec_ctx).await?,
+        CompiledTaskKind::Listen(d) => task_listen(inner, workflow, d, expr_ctx, exec_ctx).await?,
         CompiledTaskKind::Raise(d) => {
             return Err(task_raise(inner, workflow, task, d, expr_ctx, exec_ctx)?);
         }
@@ -509,40 +509,161 @@ async fn task_emit(
 /// The `listen` task.
 async fn task_listen(
     inner: &Arc<RuntimeInner>,
+    workflow: &Arc<CompiledWorkflow>,
     def: &ListenDef,
     expr_ctx: &ExpressionContext,
-    exec_ctx: &ExecContext,
+    exec_ctx: &mut ExecContext,
 ) -> Result<Value, WorkflowError> {
     let read = def.read.as_deref().unwrap_or("data");
 
-    let matchers = match &def.to {
-        ListenTo::One(filter) => vec![build_matcher(inner, filter, expr_ctx)?],
-        ListenTo::Any(filters) => build_matchers(inner, filters, expr_ctx)?,
-        ListenTo::All(filters) => build_matchers(inner, filters, expr_ctx)?,
-    };
-
-    let subscription = inner
-        .consumer
-        .subscribe(Box::new(move |event: &EventMessage| {
-            let ce = ows_runtime_events::CloudEvent::from_message(event);
-            matchers.iter().any(|m| m.matches(&ce))
-        }))
-        .await?;
-
-    let recv = subscription.recv();
-    tokio::pin!(recv);
-    let event = tokio::select! {
-        ev = &mut recv => ev,
-        _ = exec_ctx.cancel.notified() => {
-            return Err(WorkflowError::cancelled().with_execution(exec_ctx.execution_id.clone()));
+    // Determine the matchers and how many events the strategy requires.
+    let (matchers, need) = match &def.to {
+        ListenTo::One(filter) => (
+            vec![build_matcher(inner, filter, expr_ctx)?],
+            ListenNeed::One,
+        ),
+        ListenTo::Any(filters) => {
+            let m = build_matchers(inner, filters, expr_ctx)?;
+            (m, ListenNeed::One)
+        }
+        ListenTo::All(filters) => {
+            let m = build_matchers(inner, filters, expr_ctx)?;
+            let n = m.len();
+            (m, ListenNeed::All(n))
         }
     };
 
-    let Some(event) = event else {
-        return Ok(Value::Array(Vec::new()));
-    };
+    // Subscribe to the consumer and filter/consume in the gather loop below.
+    // An accept-all filter keeps a single code path for `one`, `any` and `all`
+    // (and the in-memory broker broadcasts matching events regardless).
+    let subscription = inner
+        .consumer
+        .subscribe(Box::new(|_e: &EventMessage| true))
+        .await?;
 
-    Ok(Value::Array(vec![read_event(&event, read)]))
+    // Consume the events required by the strategy.
+    let consumed = gather_listen_events(&matchers, need, subscription, exec_ctx).await?;
+
+    let read_values: Vec<Value> = consumed
+        .iter()
+        .map(|event| read_event(event, read))
+        .collect();
+
+    // Apply the optional `foreach` iterator over the consumed events.
+    if let Some(fe) = &def.foreach {
+        return foreach_listen(inner, workflow, fe, read_values, exec_ctx).await;
+    }
+
+    Ok(Value::Array(read_values))
+}
+
+/// How many events a listen strategy consumes before it may proceed.
+enum ListenNeed {
+    /// Consume exactly one matching event.
+    One,
+    /// Consume events until every one of the `usize` filters has matched.
+    All(usize),
+}
+
+/// Consumes events from a subscription according to the strategy.
+async fn gather_listen_events(
+    matchers: &[ows_runtime_events::EventMatcher],
+    need: ListenNeed,
+    subscription: Arc<dyn ows_runtime_core::EventSubscription>,
+    exec_ctx: &ExecContext,
+) -> Result<Vec<EventMessage>, WorkflowError> {
+    let mut consumed: Vec<EventMessage> = Vec::new();
+    // Tracks which matcher (by index) has already been satisfied for `all`.
+    let mut satisfied: Vec<bool> = vec![false; matchers.len()];
+
+    loop {
+        // One/Any: stop after the first matching event.
+        if matches!(need, ListenNeed::One) && !consumed.is_empty() {
+            break;
+        }
+        // All: stop once every filter has been satisfied (empty `all` resolves
+        // immediately with no events).
+        if let ListenNeed::All(n) = need {
+            if n == 0 {
+                break;
+            }
+            if satisfied.iter().all(|s| *s) {
+                break;
+            }
+        }
+
+        let recv = subscription.recv();
+        tokio::pin!(recv);
+        let event = tokio::select! {
+            ev = recv => ev,
+            _ = exec_ctx.cancel.notified() => {
+                return Err(WorkflowError::cancelled().with_execution(exec_ctx.execution_id.clone()));
+            }
+        };
+
+        let Some(event) = event else {
+            break; // subscription closed
+        };
+
+        match need {
+            ListenNeed::One => {
+                // With no matchers every event is accepted; otherwise the event
+                // must satisfy at least one filter.
+                let matched = matchers.is_empty() || {
+                    let ce = ows_runtime_events::CloudEvent::from_message(&event);
+                    matchers.iter().any(|m| m.matches(&ce))
+                };
+                if matched {
+                    consumed.push(event);
+                }
+            }
+            ListenNeed::All(_) => {
+                let ce = ows_runtime_events::CloudEvent::from_message(&event);
+                let mut advanced = false;
+                for (i, m) in matchers.iter().enumerate() {
+                    if !satisfied[i] && m.matches(&ce) {
+                        satisfied[i] = true;
+                        advanced = true;
+                    }
+                }
+                if advanced {
+                    consumed.push(event);
+                }
+            }
+        }
+    }
+
+    Ok(consumed)
+}
+
+/// Runs a listen `foreach` iterator body for each consumed event.
+async fn foreach_listen(
+    inner: &Arc<RuntimeInner>,
+    workflow: &Arc<CompiledWorkflow>,
+    fe: &ListenForeachDef,
+    items: Vec<Value>,
+    exec_ctx: &mut ExecContext,
+) -> Result<Value, WorkflowError> {
+    let at_name = fe.at.clone().unwrap_or_else(|| "index".to_string());
+    let mut outputs = Vec::new();
+    for (i, item) in items.into_iter().enumerate() {
+        if exec_ctx.cancel.is_cancelled() {
+            return Err(WorkflowError::cancelled().with_execution(exec_ctx.execution_id.clone()));
+        }
+        exec_ctx.loop_vars.insert(fe.item.clone(), item.clone());
+        exec_ctx.loop_vars.insert(at_name.clone(), json!(i));
+
+        let body_output = exec_scope(inner, workflow, &fe.body, exec_ctx, &item).await?;
+        outputs.push(body_output);
+
+        exec_ctx.loop_vars.remove(&fe.item);
+        exec_ctx.loop_vars.remove(&at_name);
+
+        if exec_ctx.ended.load(std::sync::atomic::Ordering::SeqCst) {
+            break;
+        }
+    }
+    Ok(Value::Array(outputs))
 }
 
 /// The `raise` task.

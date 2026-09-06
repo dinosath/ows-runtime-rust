@@ -294,6 +294,23 @@ pub struct ListenDef {
     pub to: ListenTo,
     /// How events are read (`data`, `envelope`, `raw`).
     pub read: Option<String>,
+    /// The optional `foreach` iterator applied to each consumed event.
+    pub foreach: Option<ListenForeachDef>,
+}
+
+/// The `foreach` iterator on a `listen` task.
+///
+/// When present, each event consumed by the listen is processed by an
+/// iteration scope (mirroring the `for` task's data-flow). The current item is
+/// exposed as `$<item>` and its zero-based index as `$<at>`.
+#[derive(Debug, Clone)]
+pub struct ListenForeachDef {
+    /// The variable name of the current consumed item.
+    pub item: String,
+    /// The optional variable name of the current item index.
+    pub at: Option<String>,
+    /// The iteration body scope.
+    pub body: Vec<CompiledTask>,
 }
 
 /// The event consumption strategy for a listen task.

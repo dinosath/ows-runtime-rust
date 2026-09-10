@@ -16,12 +16,14 @@ pub mod engine;
 pub mod error;
 pub mod ir;
 pub mod runtime;
+pub mod schedule;
 pub mod service;
 pub mod tasks;
 
 pub use ows_runtime_dsl::workflow_id;
 pub use ows_runtime_dsl::WorkflowId;
 pub use runtime::{ExecutionHandle, Runtime, RuntimeBuilder};
+pub use schedule::ScheduleSet;
 
 /// Re-exports of the official SDK models, used throughout the runtime.
 pub mod dsl_models {

@@ -516,22 +516,26 @@ async fn task_listen(
 ) -> Result<Value, WorkflowError> {
     let read = def.read.as_deref().unwrap_or("data");
 
-    // Determine the matchers and how many events the strategy requires.
-    let (matchers, need) = match &def.to {
+    // Determine the filters and how many events the strategy requires.
+    let (filters, need) = match &def.to {
         ListenTo::One(filter) => (
-            vec![build_matcher(inner, filter, expr_ctx)?],
+            vec![build_filter(inner, filter, expr_ctx)?],
             ListenNeed::One,
         ),
         ListenTo::Any(filters) => {
-            let m = build_matchers(inner, filters, expr_ctx)?;
+            let m = build_filters(inner, filters, expr_ctx)?;
             (m, ListenNeed::One)
         }
         ListenTo::All(filters) => {
-            let m = build_matchers(inner, filters, expr_ctx)?;
+            let m = build_filters(inner, filters, expr_ctx)?;
             let n = m.len();
             (m, ListenNeed::All(n))
         }
     };
+
+    // Correlation `expect` expressions are evaluated against the workflow
+    // context, so the variable map is fixed at listen start.
+    let vars = expr_ctx.as_variable_map();
 
     // Subscribe to the consumer and filter/consume in the gather loop below.
     // An accept-all filter keeps a single code path for `one`, `any` and `all`
@@ -542,7 +546,7 @@ async fn task_listen(
         .await?;
 
     // Consume the events required by the strategy.
-    let consumed = gather_listen_events(&matchers, need, subscription, exec_ctx).await?;
+    let consumed = gather_listen_events(&filters, &vars, need, subscription, exec_ctx).await?;
 
     let read_values: Vec<Value> = consumed
         .iter()
@@ -566,15 +570,24 @@ enum ListenNeed {
 }
 
 /// Consumes events from a subscription according to the strategy.
+///
+/// Correlation keys are grouped across events: with `all`, once a first value
+/// is observed for a key it becomes the expected value for that key (unless the
+/// filter declares an explicit `expect`), so all filters must agree on the
+/// correlation key values. This is the "cross-event grouping" the spec
+/// describes.
 async fn gather_listen_events(
-    matchers: &[ows_runtime_events::EventMatcher],
+    filters: &[CompiledListenFilter],
+    vars: &Map<String, Value>,
     need: ListenNeed,
     subscription: Arc<dyn ows_runtime_core::EventSubscription>,
     exec_ctx: &ExecContext,
 ) -> Result<Vec<EventMessage>, WorkflowError> {
     let mut consumed: Vec<EventMessage> = Vec::new();
-    // Tracks which matcher (by index) has already been satisfied for `all`.
-    let mut satisfied: Vec<bool> = vec![false; matchers.len()];
+    // Tracks which filter (by index) has already been satisfied for `all`.
+    let mut satisfied: Vec<bool> = vec![false; filters.len()];
+    // The first-seen correlation values for keys without an explicit `expect`.
+    let mut group: Map<String, Value> = Map::new();
 
     loop {
         // One/Any: stop after the first matching event.
@@ -607,21 +620,22 @@ async fn gather_listen_events(
 
         match need {
             ListenNeed::One => {
-                // With no matchers every event is accepted; otherwise the event
+                // With no filters every event is accepted; otherwise the event
                 // must satisfy at least one filter.
-                let matched = matchers.is_empty() || {
-                    let ce = ows_runtime_events::CloudEvent::from_message(&event);
-                    matchers.iter().any(|m| m.matches(&ce))
+                let matched = filters.is_empty() || {
+                    let mut trial = group.clone();
+                    filters
+                        .iter()
+                        .any(|f| filter_matches(exec_ctx, f, &event, vars, &mut trial))
                 };
                 if matched {
                     consumed.push(event);
                 }
             }
             ListenNeed::All(_) => {
-                let ce = ows_runtime_events::CloudEvent::from_message(&event);
                 let mut advanced = false;
-                for (i, m) in matchers.iter().enumerate() {
-                    if !satisfied[i] && m.matches(&ce) {
+                for (i, f) in filters.iter().enumerate() {
+                    if !satisfied[i] && filter_matches(exec_ctx, f, &event, vars, &mut group) {
                         satisfied[i] = true;
                         advanced = true;
                     }
@@ -634,6 +648,68 @@ async fn gather_listen_events(
     }
 
     Ok(consumed)
+}
+
+/// A compiled `listen` filter: `with` attribute constraints plus correlation.
+struct CompiledListenFilter {
+    /// The `with` attribute matcher.
+    matcher: ows_runtime_events::EventMatcher,
+    /// The correlation keys: `(from, expect)` expressions.
+    correlate: Vec<(String, Option<String>)>,
+}
+
+/// Returns whether an event satisfies a filter's `with` constraints and
+/// correlation keys. On success, any first-seen correlation values are committed
+/// to `group`.
+fn filter_matches(
+    exec_ctx: &ExecContext,
+    filter: &CompiledListenFilter,
+    event: &EventMessage,
+    vars: &Map<String, Value>,
+    group: &mut Map<String, Value>,
+) -> bool {
+    let ce = ows_runtime_events::CloudEvent::from_message(event);
+    if !filter.matcher.matches(&ce) {
+        return false;
+    }
+    let mut trial = group.clone();
+    for (from, expect) in &filter.correlate {
+        let input = event.data.clone().unwrap_or(Value::Null);
+        let got = match crate::engine::eval_expr(&exec_ctx.inner, from, &input, vars, None) {
+            Ok(v) => v,
+            Err(_) => return false,
+        };
+        match expect {
+            Some(expect) => {
+                let context = vars.get("context").cloned().unwrap_or(Value::Null);
+                let want = match crate::engine::eval_expr(
+                    &exec_ctx.inner,
+                    expect,
+                    &context,
+                    vars,
+                    None,
+                ) {
+                    Ok(v) => v,
+                    Err(_) => return false,
+                };
+                if !values_equal(&got, &want) {
+                    return false;
+                }
+            }
+            None => match trial.get(from) {
+                Some(existing) => {
+                    if !values_equal(&got, existing) {
+                        return false;
+                    }
+                }
+                None => {
+                    trial.insert(from.clone(), got);
+                }
+            },
+        }
+    }
+    *group = trial;
+    true
 }
 
 /// Runs a listen `foreach` iterator body for each consumed event.
@@ -988,10 +1064,11 @@ fn values_equal(a: &Value, b: &Value) -> bool {
     }
 }
 
+/// Builds an event matcher from a filter's `with` constraints.
 fn build_matcher(
-    inner: &Arc<RuntimeInner>,
+    _inner: &Arc<RuntimeInner>,
     filter: &EventFilterDef,
-    expr_ctx: &ExpressionContext,
+    _expr_ctx: &ExpressionContext,
 ) -> Result<ows_runtime_events::EventMatcher, WorkflowError> {
     use ows_runtime_events::{EventMatcher, FieldConstraint};
     let mut matcher = EventMatcher::new();
@@ -1012,61 +1089,33 @@ fn build_matcher(
                 .push((key.clone(), FieldConstraint::Equals(expected.clone()))),
         }
     }
-    // Correlation: when a filter declares a `correlate` key with an `expect`,
-    // only events whose `from`-extracted value equals the expected value are
-    // correlated (and thus may satisfy the filter).
-    let vars = expr_ctx.as_variable_map();
-    for corr in &filter.correlate {
-        if let Some(expect) = &corr.expect {
-            let from = corr.from.clone();
-            let expect = expect.clone();
-            let vars = vars.clone();
-            let inner = inner.clone();
-            matcher.attributes.push((
-                "correlate".to_string(),
-                FieldConstraint::Expression(Box::new(move |ce| {
-                    correlation_matches(&inner, &from, &expect, &vars, ce)
-                })),
-            ));
-        }
-    }
     Ok(matcher)
 }
 
-/// Evaluates a correlation key: whether the `from`-extracted value of an event
-/// equals the `expect` expression. Used to correlate the events of a `listen`.
-fn correlation_matches(
+/// Builds a compiled listen filter from an event filter definition.
+fn build_filter(
     inner: &Arc<RuntimeInner>,
-    from: &str,
-    expect: &str,
-    vars: &Map<String, Value>,
-    event: &ows_runtime_events::CloudEvent,
-) -> bool {
-    let input = event.data.clone().unwrap_or(Value::Null);
-    let got = inner
-        .expression
-        .compile(from)
-        .and_then(|c| inner.expression.evaluate(&c, &input, vars))
-        .ok();
-    let want = inner
-        .expression
-        .compile(expect)
-        .and_then(|c| inner.expression.evaluate(&c, &input, vars))
-        .ok();
-    match (got, want) {
-        (Some(g), Some(w)) => values_equal(&g, &w),
-        _ => false,
-    }
+    filter: &EventFilterDef,
+    expr_ctx: &ExpressionContext,
+) -> Result<CompiledListenFilter, WorkflowError> {
+    let matcher = build_matcher(inner, filter, expr_ctx)?;
+    let correlate = filter
+        .correlate
+        .iter()
+        .map(|c| (c.from.clone(), c.expect.clone()))
+        .collect();
+    Ok(CompiledListenFilter { matcher, correlate })
 }
 
-fn build_matchers(
+/// Builds compiled listen filters from a list of event filter definitions.
+fn build_filters(
     inner: &Arc<RuntimeInner>,
     filters: &[EventFilterDef],
     expr_ctx: &ExpressionContext,
-) -> Result<Vec<ows_runtime_events::EventMatcher>, WorkflowError> {
+) -> Result<Vec<CompiledListenFilter>, WorkflowError> {
     filters
         .iter()
-        .map(|f| build_matcher(inner, f, expr_ctx))
+        .map(|f| build_filter(inner, f, expr_ctx))
         .collect()
 }
 

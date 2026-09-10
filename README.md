@@ -58,7 +58,7 @@ ows-runtime/
 │   ├── ows-runtime-events/        # CloudEvents, matching, in-memory broker
 │   ├── ows-runtime-scheduler/     # scheduling abstractions + cron
 │   ├── ows-runtime-observability/ # tracing + lifecycle event emission
-│   ├── ows-runtime-observability-otel/ # OTLP/HTTP JSON exporter
+│   ├── ows-runtime-observability-otel/ # OTLP/HTTP + OTLP/gRPC exporters
 │   ├── ows-runtime-stores/        # durable ExecutionStore adapters (SQLite/Postgres/Redis)
 │   ├── ows-runtime/               # compilation + execution engine
 │   ├── ows-runtime-testing/       # deterministic test helpers and fakes

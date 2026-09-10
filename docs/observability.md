@@ -31,5 +31,19 @@ in-memory broker in `ows-runtime-events` is used for tests and local development
 
 ## OpenTelemetry
 
-An OpenTelemetry integration is not bundled yet, but the architecture supports
-it: implement `EventPublisher` (or a tracing layer) to export to OpenTelemetry.
+The `ows-runtime-observability-otel` crate bridges lifecycle events to
+OpenTelemetry by implementing `EventPublisher`:
+
+- `OpenTelemetryLogsPublisher` — OTLP/HTTP JSON log records.
+- `OpenTelemetryTracePublisher` — OTLP/HTTP JSON spans.
+- `OpenTelemetryMetricsExporter` / `RuntimeMetrics` — counters and duration
+  histograms exported as OTLP/HTTP JSON metrics.
+- Behind the `otlp-grpc` feature: `OtlpGrpcLogsPublisher`,
+  `OtlpGrpcTracePublisher` and `OtlpGrpcMetricsExporter`, which use the
+  generated `opentelemetry-proto` messages over `tonic` (default endpoint
+  `http://localhost:4317`).
+
+All exporters are verified end to end against a loopback collector
+(OTLP/HTTP) and a real `tonic` collector (OTLP/gRPC). Because everything flows
+through `EventPublisher`, tracing SDKs or broker adapters can be layered on the
+same interface.

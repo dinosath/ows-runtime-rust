@@ -1,7 +1,8 @@
-//! Executes the official OWS specification examples.
+//! Executes the official OWS specification examples (data-driven).
 //!
-//! Requires a checkout of the OWS specification repository, supplied via the
-//! `OWS_SPEC_REPO` environment variable. If it is not set, the test is skipped.
+//! By default this runs against the official examples vendored into
+//! `tests/fixtures/ows_examples`. Set `OWS_SPEC_REPO` to run against a
+//! specification checkout instead.
 
 use std::path::PathBuf;
 

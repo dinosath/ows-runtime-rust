@@ -124,13 +124,7 @@ do:
 async fn extension_targets_call_function_name() {
     use std::sync::Arc;
     let runtime = Runtime::builder()
-        .with_service(Arc::new(ows_runtime_testing::FakeServiceInvoker::new()))
-        .with_policy(ows_runtime_core::RuntimePolicy {
-            allow_network: true,
-            allowed_schemes: vec!["https".into()],
-            allowed_hosts: vec!["example.com".into()],
-            ..Default::default()
-        })
+        .register_function("http", Arc::new(FakeHttp))
         .build()
         .unwrap();
     let def = ows_runtime_dsl::from_yaml(
@@ -159,4 +153,17 @@ do:
     assert_eq!(wf.extensions[0].extend, "http");
     let out = runtime.run(wf, Value::Null).await.unwrap();
     let _ = out;
+}
+
+/// A `call: http` function invoker that never touches the network.
+struct FakeHttp;
+
+#[async_trait::async_trait]
+impl ows_runtime::service::FunctionInvoker for FakeHttp {
+    async fn invoke(
+        &self,
+        _req: ows_runtime::service::FunctionRequest<'_>,
+    ) -> Result<Value, ows_runtime_core::WorkflowError> {
+        Ok(json!({ "status": 200 }))
+    }
 }

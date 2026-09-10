@@ -18,6 +18,8 @@ providers; those are adapters behind stable core traits defined in
 | `ows-runtime-scheduler` | Scheduling abstractions plus a cron-backed schedule parser. |
 | `ows-runtime-observability` | `tracing` setup and OWS lifecycle cloud-event emission. |
 | `ows-runtime` | Compilation pipeline and the scope-based execution engine, all task types, HTTP/OpenAPI function invokers. |
+| `ows-runtime-stores` | Durable `ExecutionStore` adapters (SQLite/PostgreSQL/Redis). |
+| `ows-runtime-observability-otel` | OTLP/HTTP JSON and OTLP/gRPC exporters for lifecycle logs, spans and metrics. |
 | `ows-runtime-testing` | Deterministic test helpers and fakes. |
 | `ows-runtime-cli` | Thin CLI: `validate`, `compile`, `run`, `conformance`. |
 

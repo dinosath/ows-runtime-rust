@@ -33,10 +33,12 @@ those are adapters behind stable core traits.
   events through the configured store, so interrupted executions can be resumed
   with `Runtime::resume`. An OpenTelemetry OTLP/HTTP JSON exporter for
   lifecycle logs, spans and metrics lives in `ows-runtime-observability-otel`.
-- **Experimental / opt-in transports**: the gRPC adapter targets gRPC services
-  exposed through a JSON/gateway endpoint, and the AsyncAPI adapter publishes
-  over an HTTP channel binding or a broker-based transport. Container/script/
-  shell `run` processes are deny-by-default behind the `ProcessRunner` policy.
+- **Experimental / opt-in transports**: the `grpc` adapter targets gRPC services
+  exposed through a JSON/gateway endpoint, and (behind the `grpc-native`
+  feature) natively over protobuf/HTTP-2 by compiling the workflow's `.proto` at
+  runtime. The AsyncAPI adapter publishes over an HTTP channel binding or a
+  broker-based transport. Container/script/shell `run` processes are
+  deny-by-default behind the `ProcessRunner` policy.
 
 See [`docs/specification-coverage.md`](docs/specification-coverage.md) for the
 full feature matrix.
@@ -176,9 +178,12 @@ pin the CTK version.
 
 Roadmap items implemented:
 
-- gRPC, AsyncAPI, A2A and MCP `call` function adapters (bundled; gRPC via a
-  JSON/gateway endpoint, AsyncAPI over an HTTP channel binding **or** a
-  broker-based transport using the runtime's event publisher/consumer).
+- gRPC, AsyncAPI, A2A and MCP `call` function adapters (bundled). gRPC supports
+  both a JSON/gateway endpoint and, behind the `grpc-native` feature, a native
+  protobuf/HTTP-2 transport that compiles the workflow's `.proto` at runtime
+  with `protox` and calls it with dynamic messages (`prost-reflect`) over
+  `tonic`. AsyncAPI supports an HTTP channel binding **or** a broker-based
+  transport using the runtime's event publisher/consumer.
 - `use.extensions`: extension tasks run `before`/`after` every task of the
   targeted type, guarded by `when`, with `then: exit` short-circuiting the
   extended task.
@@ -205,9 +210,6 @@ Roadmap items implemented:
 
 Remaining / future work:
 
-- Native protobuf/HTTP-2 gRPC transport (the bundled gRPC adapter still targets
-  services exposed through a JSON transcoding/gateway endpoint; the official
-  `.proto` examples require a protobuf codegen/reflection transport).
 - Live CTK network scenarios; OTLP/gRPC export (spans and metrics are exported
   over OTLP/HTTP JSON to avoid forcing a gRPC/protobuf SDK on every build).
 

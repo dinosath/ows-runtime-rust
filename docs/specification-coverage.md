@@ -27,7 +27,7 @@ non-network ones.
 | `Wait` task | Wait | ✅ | ✅ | ✅ | ✅ | |
 | `Call` task — HTTP | Call/HTTP | ✅ | ✅ | ✅ | 🚧 | network scenarios skip by default |
 | `Call` task — OpenAPI | Call/OpenAPI | ✅ | ✅ | ✅ | 🚧 | network |
-| `Call` task — gRPC | Call/gRPC | ✅ | ✅ | ✅ | — | bundled JSON/gateway adapter |
+| `Call` task — gRPC | Call/gRPC | ✅ | ✅ | ✅ | — | JSON/gateway + native protobuf/HTTP-2 (`grpc-native`) |
 | `Call` task — AsyncAPI | Call/AsyncAPI | ✅ | ✅ | ✅ | — | bundled adapter (HTTP publish) |
 | `Call` task — A2A | Call/A2A | ✅ | ✅ | ✅ | — | bundled JSON-RPC adapter |
 | `Call` task — MCP | Call/MCP | ✅ | ✅ | ✅ | — | bundled JSON-RPC adapter |
@@ -54,13 +54,14 @@ non-network ones.
 
 ## Documented limitations
 
-- The gRPC adapter targets gRPC services exposed through a JSON transcoding /
-  HTTP gateway (the runtime does not embed protobuf code generation or a
-  `.proto` compiler). The official `.proto`-based gRPC examples therefore
-  require a native protobuf/HTTP-2 transport, which is not bundled. AsyncAPI
-  supports both an HTTP channel binding and a broker-based transport
-  (`transport.broker`) over the runtime's event publisher/consumer; A2A/MCP use
-  HTTP/JSON transports.
+- The `grpc` function dispatches on the call arguments: with a `proto`
+  descriptor it uses the native protobuf/HTTP-2 transport (the `grpc-native`
+  feature; the `.proto` is compiled at runtime with `protox`, messages are
+  dynamic `prost-reflect` messages, and the call is a unary `tonic` request over
+  plaintext HTTP/2 — TLS is not bundled). Without `proto` it falls back to the
+  JSON transcoding/gateway adapter. AsyncAPI supports both an HTTP channel
+  binding and a broker-based transport (`transport.broker`) over the runtime's
+  event publisher/consumer; A2A/MCP use HTTP/JSON transports.
 - `run` container/script/shell require a `ProcessRunner` adapter and are
   deny-by-default.
 - `listen` filters support `correlate` `from`/`expect` (with `expect` evaluated

@@ -636,7 +636,10 @@ fn resolve_optional_str(
 }
 
 #[cfg(feature = "http")]
-fn enforce_network_policy(inner: &Arc<RuntimeInner>, uri: &str) -> Result<(), WorkflowError> {
+pub(crate) fn enforce_network_policy(
+    inner: &Arc<RuntimeInner>,
+    uri: &str,
+) -> Result<(), WorkflowError> {
     let policy = &inner.policy;
     let parsed = url::Url::parse(uri)
         .map_err(|e| crate::error::semantic_error(format!("invalid endpoint uri `{uri}`: {e}")))?;

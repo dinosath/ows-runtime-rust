@@ -41,6 +41,10 @@
   `ows-runtime-observability-otel`.
 - Broker-based AsyncAPI transport (`transport.broker`) over the runtime's event
   publisher/consumer.
+- Native protobuf/HTTP-2 gRPC transport behind the `grpc-native` feature:
+  runtime `.proto` compilation (`protox`), dynamic messages (`prost-reflect`)
+  and unary calls over `tonic`. The `grpc` function dispatches to it when the
+  call supplies a `proto` descriptor, else to the JSON/gateway adapter.
 - Inline `for.in` collections are normalized so the official examples parse.
 - Data-driven tests: the official OWS CTK features and examples are vendored
   and executed in offline CI, plus a case-file suite under

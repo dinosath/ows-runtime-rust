@@ -220,4 +220,22 @@ errors:
         assert!(c.errors.unwrap().contains_key("e"));
         let _ = std::fs::remove_file(&path);
     }
+
+    #[tokio::test]
+    async fn file_resolver_reports_missing_file() {
+        let r = FileCatalogResolver;
+        let err = r.resolve("file:///nope/missing.json").await.unwrap_err();
+        assert_eq!(err.kind, ErrorKind::Communication);
+    }
+
+    #[tokio::test]
+    async fn static_resolver_builder_registers_endpoints() {
+        let c = ComponentDefinitionCollection {
+            secrets: Some(vec!["x".into()]),
+            ..Default::default()
+        };
+        let r = StaticCatalogResolver::new().with("https://a", c);
+        assert!(r.resolve("https://a").await.is_ok());
+        assert!(r.resolve("https://b").await.is_err());
+    }
 }

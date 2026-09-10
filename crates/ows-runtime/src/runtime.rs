@@ -675,6 +675,19 @@ impl RuntimeBuilder {
             drop(functions);
         }
 
+        // The native protobuf/HTTP-2 gRPC transport (when enabled): a `grpc`
+        // call with a `proto` descriptor uses it, otherwise it falls back to
+        // the JSON/gateway adapter.
+        #[cfg(feature = "grpc-native")]
+        {
+            let mut functions = inner.functions.write().unwrap();
+            functions.insert(
+                "grpc".to_string(),
+                Arc::new(crate::grpc::GrpcDispatchInvoker::new(inner.clone())),
+            );
+            drop(functions);
+        }
+
         Ok(Runtime { inner })
     }
 }

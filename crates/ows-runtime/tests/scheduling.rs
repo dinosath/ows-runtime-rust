@@ -109,6 +109,17 @@ async fn event_trigger_fires_on_matching_event() {
 }
 
 #[tokio::test]
+async fn invalid_cron_schedule_never_fires() {
+    let runtime = Runtime::builder().build().unwrap();
+    let def = ows_runtime_dsl::from_yaml(&workflow("  cron: 'not a cron'")).unwrap();
+    runtime.register_definition(&def).unwrap();
+    let set = runtime.start_schedules().await.unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    assert_eq!(set.triggered(), 0);
+    set.cancel();
+}
+
+#[tokio::test]
 async fn start_schedules_is_noop_without_schedules() {
     let runtime = Runtime::builder().build().unwrap();
     let def = ows_runtime_dsl::from_yaml(

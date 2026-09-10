@@ -14,6 +14,8 @@ pub mod catalog;
 pub mod compile;
 pub mod engine;
 pub mod error;
+#[cfg(feature = "grpc-native")]
+pub mod grpc;
 pub mod ir;
 pub mod runtime;
 pub mod schedule;

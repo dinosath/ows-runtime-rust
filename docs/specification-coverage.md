@@ -44,7 +44,7 @@ non-network ones.
 | Events (CloudEvents, lifecycle) | Events | ✅ | ✅ | ✅ | — | in-memory broker |
 | Event-driven scheduling | Schedule | ✅ | ✅ | ✅ | — | `Runtime::start_schedules` fires `on` triggers |
 | Cron / every / after scheduling | Schedule | ✅ | ✅ | ✅ | — | fired end-to-end by `Runtime::start_schedules` |
-| Authentication (basic/bearer) | Authentication | ✅ | ✅ | ✅ | 🚧 | |
+| Authentication (basic/bearer) | Authentication | ✅ | ✅ | ✅ | 🚧 | inline `basic`/`bearer` only; `oauth2`/`oidc`/`certificate`/`digest` are not implemented |
 | Secrets | Secrets | ✅ | ✅ | ✅ | — | `SecretResolver` (map/env); undeclared refs rejected at compile |
 | Extensions | Extensions | ✅ | ✅ | ✅ | — | `before`/`after`/`when`; `then: exit` short-circuits |
 | Catalogs | Catalogs | ✅ | ✅ | ✅ | — | `CatalogResolver` (static/file/HTTP), nested catalogs |
@@ -93,3 +93,7 @@ non-network ones.
   `tonic` collector implementing the generated `LogsService`).
 - The `evaluate.language` is honored as `jq`; the `js` expression language is
   parsed but not executed (the bundled engine is a sandboxed jq subset).
+- Endpoint authentication supports inline `basic` and `bearer` schemes. `oauth2`,
+  `oidc`, `certificate` and `digest` are recognized by the model but not
+  applied, and `use`-referenced authentication policies are not resolved (the
+  HTTP invoker does not receive the workflow's component collection).

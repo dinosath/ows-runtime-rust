@@ -313,8 +313,19 @@ pub struct ListenDef {
     pub to: ListenTo,
     /// How events are read (`data`, `envelope`, `raw`).
     pub read: Option<String>,
+    /// An additional stop condition (`until`), if any.
+    pub until: Option<ListenUntil>,
     /// The optional `foreach` iterator applied to each consumed event.
     pub foreach: Option<ListenForeachDef>,
+}
+
+/// The `until` stop condition of a `listen` task.
+#[derive(Debug, Clone)]
+pub enum ListenUntil {
+    /// Stop when the expression (evaluated against the consumed events) is true.
+    Expression(String),
+    /// Stop when the given event filters have been satisfied.
+    Strategy(Vec<EventFilterDef>),
 }
 
 /// The `foreach` iterator on a `listen` task.

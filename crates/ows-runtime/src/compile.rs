@@ -310,6 +310,7 @@ fn compile_kind(
             Ok(CompiledTaskKind::Listen(ListenDef {
                 to: compile_listen_to(&t.listen.to),
                 read: t.listen.read.clone(),
+                until: compile_listen_until(t.listen.to.until.as_deref()),
                 foreach,
             }))
         }
@@ -334,6 +335,25 @@ fn compile_kind(
             Ok(CompiledTaskKind::Wait(WaitDef {
                 duration: dur.unwrap_or_default(),
             }))
+        }
+    }
+}
+
+/// Compiles a `listen.until` stop condition.
+fn compile_listen_until(
+    until: Option<&dsl_models::OneOfEventConsumptionStrategyDefinitionOrExpression>,
+) -> Option<ListenUntil> {
+    let until = until?;
+    match until {
+        dsl_models::OneOfEventConsumptionStrategyDefinitionOrExpression::Expression(e) => {
+            Some(ListenUntil::Expression(e.clone()))
+        }
+        dsl_models::OneOfEventConsumptionStrategyDefinitionOrExpression::Strategy(strategy) => {
+            let filters = match compile_listen_to(strategy) {
+                ListenTo::One(f) => vec![f],
+                ListenTo::Any(v) | ListenTo::All(v) => v,
+            };
+            Some(ListenUntil::Strategy(filters))
         }
     }
 }

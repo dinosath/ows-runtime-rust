@@ -35,6 +35,7 @@
   `cron`/`on` triggers, returning a cancellable `ScheduleSet`.
 - Listen correlation grouping: `expect` is evaluated against the workflow
   context and first-seen correlation values are shared across `all` filters.
+- `listen.until` stop conditions (expression and strategy forms).
 - Durable checkpoint/resume: the engine persists a per-top-level-task
   checkpoint and `Runtime::resume` continues a non-terminal execution.
 - OpenTelemetry OTLP/HTTP JSON spans and metrics (in addition to logs) in

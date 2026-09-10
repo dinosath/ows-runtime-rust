@@ -23,7 +23,7 @@ non-network ones.
 | `Try` task (catch, retry, do) | Try | ✅ | ✅ | ✅ | ✅ | |
 | `Raise` task | Raise | ✅ | ✅ | ✅ | ✅ | |
 | `Emit` task | Emit | ✅ | ✅ | ✅ | ✅ | |
-| `Listen` task | Listen | ✅ | ✅ | ✅ | ✅ | `one`/`any`/`all`, `foreach`, correlation `from`/`expect` + cross-event grouping |
+| `Listen` task | Listen | ✅ | ✅ | ✅ | ✅ | `one`/`any`/`all`, `until`, `foreach`, correlation `from`/`expect` + grouping |
 | `Wait` task | Wait | ✅ | ✅ | ✅ | ✅ | |
 | `Call` task — HTTP | Call/HTTP | ✅ | ✅ | ✅ | 🚧 | network scenarios skip by default |
 | `Call` task — OpenAPI | Call/OpenAPI | ✅ | ✅ | ✅ | 🚧 | network |
@@ -71,7 +71,10 @@ non-network ones.
 - `listen` filters support `correlate` `from`/`expect` (with `expect` evaluated
   against the workflow context) and cross-event correlation *grouping*: for
   `all`, a first-seen key value becomes the expected value shared by subsequent
-  filters unless a filter declares an explicit `expect`.
+  filters unless a filter declares an explicit `expect`. The `until` stop
+  condition is honored: an expression is evaluated against the events consumed
+  so far, and a strategy stops once its filters match (the matching event is
+  consumed).
 - Scheduling triggers (`every`/`after`/`cron`/`on`) fire end-to-end via
   `Runtime::start_schedules`, which also registers each schedule with the
   configured `Scheduler` trait. A durable/distributed scheduler can still be

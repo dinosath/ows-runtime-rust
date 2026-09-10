@@ -534,6 +534,13 @@ async fn task_listen(
         }
     };
 
+    // The optional `until` stop condition.
+    let (until_expression, until_filters) = match &def.until {
+        None => (None, Vec::new()),
+        Some(ListenUntil::Expression(src)) => (Some(src.clone()), Vec::new()),
+        Some(ListenUntil::Strategy(fs)) => (None, build_filters(inner, fs, expr_ctx)?),
+    };
+
     // Correlation `expect` expressions are evaluated against the workflow
     // context, so the variable map is fixed at listen start.
     let vars = expr_ctx.as_variable_map();
@@ -547,7 +554,17 @@ async fn task_listen(
         .await?;
 
     // Consume the events required by the strategy.
-    let consumed = gather_listen_events(&filters, &vars, need, subscription, exec_ctx).await?;
+    let consumed = gather_listen_events(
+        &filters,
+        &vars,
+        need,
+        until_expression.as_deref(),
+        &until_filters,
+        read,
+        subscription,
+        exec_ctx,
+    )
+    .await?;
 
     let read_values: Vec<Value> = consumed
         .iter()
@@ -577,33 +594,47 @@ enum ListenNeed {
 /// filter declares an explicit `expect`), so all filters must agree on the
 /// correlation key values. This is the "cross-event grouping" the spec
 /// describes.
+///
+/// When an `until` stop condition is present, the listen also keeps consuming
+/// until that condition holds. An `until` expression is evaluated against the
+/// events consumed so far; an `until` strategy stops once its filters match.
+#[allow(clippy::too_many_arguments)]
 async fn gather_listen_events(
     filters: &[CompiledListenFilter],
     vars: &Map<String, Value>,
     need: ListenNeed,
+    until_expression: Option<&str>,
+    until_filters: &[CompiledListenFilter],
+    read: &str,
     subscription: Arc<dyn ows_runtime_core::EventSubscription>,
     exec_ctx: &ExecContext,
 ) -> Result<Vec<EventMessage>, WorkflowError> {
+    let has_until = until_expression.is_some() || !until_filters.is_empty();
     let mut consumed: Vec<EventMessage> = Vec::new();
     // Tracks which filter (by index) has already been satisfied for `all`.
     let mut satisfied: Vec<bool> = vec![false; filters.len()];
+    // Tracks which `until` filter has matched.
+    let mut until_state: Vec<bool> = vec![false; until_filters.len()];
+    let mut until_satisfied = false;
     // The first-seen correlation values for keys without an explicit `expect`.
     let mut group: Map<String, Value> = Map::new();
 
     loop {
-        // One/Any: stop after the first matching event.
-        if matches!(need, ListenNeed::One) && !consumed.is_empty() {
+        let base_satisfied = match need {
+            ListenNeed::One => {
+                if has_until {
+                    // With an `until` condition an accept-all strategy places no
+                    // requirement of its own; the `until` loop governs stopping.
+                    filters.is_empty() || !consumed.is_empty()
+                } else {
+                    !consumed.is_empty()
+                }
+            }
+            ListenNeed::All(n) => n == 0 || satisfied.iter().all(|s| *s),
+        };
+        let until_done = !has_until || until_satisfied;
+        if base_satisfied && until_done {
             break;
-        }
-        // All: stop once every filter has been satisfied (empty `all` resolves
-        // immediately with no events).
-        if let ListenNeed::All(n) = need {
-            if n == 0 {
-                break;
-            }
-            if satisfied.iter().all(|s| *s) {
-                break;
-            }
         }
 
         let recv = subscription.recv();
@@ -619,6 +650,7 @@ async fn gather_listen_events(
             break; // subscription closed
         };
 
+        let mut accepted = false;
         match need {
             ListenNeed::One => {
                 // With no filters every event is accepted; otherwise the event
@@ -630,7 +662,8 @@ async fn gather_listen_events(
                         .any(|f| filter_matches(exec_ctx, f, &event, vars, &mut trial))
                 };
                 if matched {
-                    consumed.push(event);
+                    consumed.push(event.clone());
+                    accepted = true;
                 }
             }
             ListenNeed::All(_) => {
@@ -642,8 +675,34 @@ async fn gather_listen_events(
                     }
                 }
                 if advanced {
-                    consumed.push(event);
+                    consumed.push(event.clone());
+                    accepted = true;
                 }
+            }
+        }
+
+        // `until` as a consumption strategy.
+        if !until_filters.is_empty() {
+            let mut advanced = false;
+            for (i, f) in until_filters.iter().enumerate() {
+                if !until_state[i] && filter_matches(exec_ctx, f, &event, vars, &mut group) {
+                    until_state[i] = true;
+                    advanced = true;
+                }
+            }
+            if advanced {
+                if !accepted {
+                    consumed.push(event.clone());
+                }
+                until_satisfied = until_state.iter().all(|s| *s);
+            }
+        }
+
+        // `until` as an expression evaluated against the consumed events.
+        if let Some(expr) = until_expression {
+            let values = Value::Array(consumed.iter().map(|e| read_event(e, read)).collect());
+            if is_truthy(&eval_expr(&exec_ctx.inner, expr, &values, vars, None)?) {
+                until_satisfied = true;
             }
         }
     }

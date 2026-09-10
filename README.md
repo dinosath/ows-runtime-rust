@@ -205,9 +205,10 @@ Roadmap items implemented:
 - OpenTelemetry integration crate (`ows-runtime-observability-otel`) that
   exports lifecycle events as OTLP/HTTP JSON **logs, spans and metrics**, plus
   OTLP/gRPC exporters behind the `otlp-grpc` feature.
-- `listen` `one`/`any`/`all` with `foreach`, correlation `from`/`expect`
-  evaluated against the workflow context, and cross-event correlation
-  *grouping* (first-seen key values shared across filters).
+- `listen` `one`/`any`/`all` with `foreach`, the `until` stop condition,
+  correlation `from`/`expect` evaluated against the workflow context, and
+  cross-event correlation *grouping* (first-seen key values shared across
+  filters).
 - Data-driven testing: the official OWS CTK features and examples are vendored
   and run in offline CI, alongside a case-file suite for extension, catalog,
   secret, scheduling, listen, flow and data-flow behavior.

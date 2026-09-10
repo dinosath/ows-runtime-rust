@@ -197,6 +197,8 @@ Roadmap items implemented:
 - End-to-end scheduling: `schedule.every`/`after`/`cron`/`on` triggers fire
   executions via `Runtime::start_schedules` on the injectable clock and event
   consumer, with a cancellable `ScheduleSet`.
+- Process execution: an opt-in `TokioProcessRunner` runs `run` shell/script
+  tasks (and containers via Docker). The default remains deny-by-default.
 - Durable execution via `ExecutionStore` adapters in `ows-runtime-stores`
   (SQLite by default; PostgreSQL and Redis behind the `postgres`/`redis`
   features), including per-task **checkpointing and `Runtime::resume`**.

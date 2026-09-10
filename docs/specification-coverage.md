@@ -32,7 +32,7 @@ non-network ones.
 | `Call` task — A2A | Call/A2A | ✅ | ✅ | ✅ | — | bundled JSON-RPC adapter |
 | `Call` task — MCP | Call/MCP | ✅ | ✅ | ✅ | — | bundled JSON-RPC adapter |
 | `Run` task — workflow | Run/Workflow | ✅ | ✅ | ✅ | — | |
-| `Run` task — shell/script/container | Run | 🚧 | ✅ | ✅ | — | deny-by-default; `ProcessRunner` policy |
+| `Run` task — shell/script/container | Run | 🚧 | ✅ | ✅ | — | deny-by-default; opt-in `TokioProcessRunner` (scripts/containers) |
 | Runtime expressions (jq) | Runtime Expressions | ✅ | ✅ | ✅ | ✅ | sandboxed subset |
 | Input validation/transform | Data Flow | ✅ | ✅ | ✅ | ✅ | |
 | Output transform/validation | Data Flow | ✅ | ✅ | ✅ | ✅ | |
@@ -63,7 +63,11 @@ non-network ones.
   binding and a broker-based transport (`transport.broker`) over the runtime's
   event publisher/consumer; A2A/MCP use HTTP/JSON transports.
 - `run` container/script/shell require a `ProcessRunner` adapter and are
-  deny-by-default.
+  deny-by-default. An opt-in `TokioProcessRunner` executes shell/scripts (and
+  containers via the Docker CLI) when explicitly enabled with
+  `allow_scripts`/`allow_containers`. The pinned SDK model does not carry the
+  spec's `run.return` field, so the return selection currently defaults to
+  `stdout`.
 - `listen` filters support `correlate` `from`/`expect` (with `expect` evaluated
   against the workflow context) and cross-event correlation *grouping*: for
   `all`, a first-seen key value becomes the expected value shared by subsequent

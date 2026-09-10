@@ -17,6 +17,7 @@ pub mod error;
 #[cfg(feature = "grpc-native")]
 pub mod grpc;
 pub mod ir;
+pub mod process;
 pub mod runtime;
 pub mod schedule;
 pub mod service;
@@ -24,6 +25,7 @@ pub mod tasks;
 
 pub use ows_runtime_dsl::workflow_id;
 pub use ows_runtime_dsl::WorkflowId;
+pub use process::TokioProcessRunner;
 pub use runtime::{ExecutionHandle, Runtime, RuntimeBuilder};
 pub use schedule::ScheduleSet;
 

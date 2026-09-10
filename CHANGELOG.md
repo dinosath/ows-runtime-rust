@@ -43,6 +43,8 @@
   feature (`opentelemetry-proto` + `tonic`).
 - Broker-based AsyncAPI transport (`transport.broker`) over the runtime's event
   publisher/consumer.
+- Opt-in `TokioProcessRunner` that executes `run` shell/script tasks (and
+  containers via Docker); the default stays deny-by-default.
 - Native protobuf/HTTP-2 gRPC transport behind the `grpc-native` feature:
   runtime `.proto` compilation (`protox`), dynamic messages (`prost-reflect`)
   and unary calls over `tonic`. The `grpc` function dispatches to it when the

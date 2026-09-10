@@ -145,7 +145,8 @@ async fn task_for(
             }
         }
 
-        let body_output = exec_scope(inner, workflow, &def.body, exec_ctx, &body_input, None).await?;
+        let body_output =
+            exec_scope(inner, workflow, &def.body, exec_ctx, &body_input, None).await?;
         output = body_output.clone();
         body_input = body_output;
 
@@ -682,16 +683,11 @@ fn filter_matches(
         match expect {
             Some(expect) => {
                 let context = vars.get("context").cloned().unwrap_or(Value::Null);
-                let want = match crate::engine::eval_expr(
-                    &exec_ctx.inner,
-                    expect,
-                    &context,
-                    vars,
-                    None,
-                ) {
-                    Ok(v) => v,
-                    Err(_) => return false,
-                };
+                let want =
+                    match crate::engine::eval_expr(&exec_ctx.inner, expect, &context, vars, None) {
+                        Ok(v) => v,
+                        Err(_) => return false,
+                    };
                 if !values_equal(&got, &want) {
                     return false;
                 }

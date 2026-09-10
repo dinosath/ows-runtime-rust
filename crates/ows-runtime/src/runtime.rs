@@ -224,7 +224,11 @@ impl Runtime {
         let mut queue: Vec<(String, crate::dsl_models::OneOfEndpointDefinitionOrUri)> = merged
             .catalogs
             .as_ref()
-            .map(|c| c.iter().map(|(k, v)| (k.clone(), v.endpoint.clone())).collect())
+            .map(|c| {
+                c.iter()
+                    .map(|(k, v)| (k.clone(), v.endpoint.clone()))
+                    .collect()
+            })
             .unwrap_or_default();
         let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
 
@@ -300,10 +304,7 @@ impl Runtime {
     /// key) and the execution must not be terminal. Execution continues from the
     /// checkpointed top-level task index with the checkpointed context and
     /// input, reusing the original execution id.
-    pub async fn resume(
-        &self,
-        execution_id: &str,
-    ) -> Result<serde_json::Value, WorkflowError> {
+    pub async fn resume(&self, execution_id: &str) -> Result<serde_json::Value, WorkflowError> {
         let record = self
             .inner
             .store
@@ -318,13 +319,12 @@ impl Runtime {
             )));
         }
 
-        let workflow = self
-            .inner
-            .workflow(&record.workflow)
-            .ok_or_else(|| runtime_detail(format!(
+        let workflow = self.inner.workflow(&record.workflow).ok_or_else(|| {
+            runtime_detail(format!(
                 "workflow `{}` is not registered; register it before resuming",
                 record.workflow
-            )))?;
+            ))
+        })?;
 
         let next_index = record
             .pointer
@@ -379,9 +379,7 @@ fn unknown_execution(execution_id: &str) -> WorkflowError {
 }
 
 /// Extracts the URI from a catalog endpoint definition.
-fn catalog_endpoint_uri(
-    endpoint: &crate::dsl_models::OneOfEndpointDefinitionOrUri,
-) -> String {
+fn catalog_endpoint_uri(endpoint: &crate::dsl_models::OneOfEndpointDefinitionOrUri) -> String {
     match endpoint {
         crate::dsl_models::OneOfEndpointDefinitionOrUri::Uri(uri) => uri.clone(),
         crate::dsl_models::OneOfEndpointDefinitionOrUri::Endpoint(e) => e.uri.clone(),

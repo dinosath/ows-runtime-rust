@@ -118,5 +118,9 @@ do:
         .iter()
         .find(|r| r.execution_id == "durable-exec-1")
         .unwrap();
-    assert_eq!(record.phase, Phase::Completed, "resume must persist completion");
+    assert_eq!(
+        record.phase,
+        Phase::Completed,
+        "resume must persist completion"
+    );
 }

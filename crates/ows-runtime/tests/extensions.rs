@@ -53,10 +53,7 @@ do:
     )
     .unwrap();
     let wf = runtime.register_definition(&def).unwrap();
-    let out = runtime
-        .run(wf, json!({ "enable": false }))
-        .await
-        .unwrap();
+    let out = runtime.run(wf, json!({ "enable": false })).await.unwrap();
     // Guard is evaluated against the task's scope input (`enable: false`), so
     // the extension is skipped and the raw set output is returned.
     assert_eq!(out, json!({ "x": 1 }));
@@ -82,10 +79,7 @@ do:
     )
     .unwrap();
     let wf = runtime.register_definition(&def).unwrap();
-    let out = runtime
-        .run(wf, json!({ "enable": true }))
-        .await
-        .unwrap();
+    let out = runtime.run(wf, json!({ "enable": true })).await.unwrap();
     assert_eq!(out, json!({ "wrapped": true }));
 }
 
@@ -115,7 +109,10 @@ do:
     .unwrap();
     let wf = runtime.register_definition(&def).unwrap();
     let out = runtime.run(wf, json!({ "mock": true })).await.unwrap();
-    assert_eq!(out, json!({ "statusCode": 200, "content": { "foo": "baz" } }));
+    assert_eq!(
+        out,
+        json!({ "statusCode": 200, "content": { "foo": "baz" } })
+    );
 
     // Without the guard, the extension does not apply and the body runs.
     let wf2 = runtime.register_definition(&def).unwrap();

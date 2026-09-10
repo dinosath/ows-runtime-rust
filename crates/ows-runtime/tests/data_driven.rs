@@ -162,7 +162,11 @@ async fn data_driven_cases() {
         })
         .collect();
     paths.sort();
-    assert!(!paths.is_empty(), "no data-driven cases found in {}", dir.display());
+    assert!(
+        !paths.is_empty(),
+        "no data-driven cases found in {}",
+        dir.display()
+    );
 
     let mut ran = 0;
     for path in paths {
@@ -173,5 +177,8 @@ async fn data_driven_cases() {
         ran += 1;
     }
     eprintln!("data-driven cases ran: {ran}");
-    assert!(ran >= 8, "expected at least 8 data-driven cases, found {ran}");
+    assert!(
+        ran >= 8,
+        "expected at least 8 data-driven cases, found {ran}"
+    );
 }

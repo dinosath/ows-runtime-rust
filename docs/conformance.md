@@ -9,9 +9,10 @@ The CTK is a suite of Gherkin feature files in the OWS specification repository
 (`ctk/features`). Each scenario defines a workflow, an optional input, executes
 it, and asserts on the outcome (completion, output, faults, task ordering).
 
-The runtime does **not** vendor the CTK. Instead, it pins the specification
-repository (and thus the CTK) to a specific version and executes against that
-path.
+The official CTK features are **vendored** into
+`crates/ows-runtime-cli/tests/ctk/features` (with attribution) so the
+data-driven conformance suite runs in offline CI. Set `CTK_DIR` or
+`OWS_SPEC_REPO` to run against a different revision.
 
 ## Running
 

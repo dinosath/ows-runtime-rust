@@ -82,10 +82,7 @@ fn enforce_declared_secrets(
 }
 
 /// Recursively scans a definition for `$secrets.<name>` references.
-fn collect_secret_refs(
-    value: &serde_json::Value,
-    out: &mut std::collections::BTreeSet<String>,
-) {
+fn collect_secret_refs(value: &serde_json::Value, out: &mut std::collections::BTreeSet<String>) {
     use regex::Regex;
     use std::sync::OnceLock;
     static DOT: OnceLock<Regex> = OnceLock::new();

@@ -8,21 +8,29 @@ use ows_runtime::Runtime;
 use serde_json::{json, Value};
 
 fn error_catalog() -> ComponentDefinitionCollection {
-    let mut collection = ComponentDefinitionCollection::default();
-    collection.errors = Some(
-        [(
-            "catalogError".to_string(),
-            ErrorDefinition::new("https://example.com/errors/catalog", "Catalog Error", json!(418), None, None),
-        )]
-        .into_iter()
-        .collect(),
-    );
-    collection
+    ComponentDefinitionCollection {
+        errors: Some(
+            [(
+                "catalogError".to_string(),
+                ErrorDefinition::new(
+                    "https://example.com/errors/catalog",
+                    "Catalog Error",
+                    json!(418),
+                    None,
+                    None,
+                ),
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        ..Default::default()
+    }
 }
 
 #[tokio::test]
 async fn resolves_catalog_error_reference() {
-    let resolver = StaticCatalogResolver::new().with("https://catalog.example/errors", error_catalog());
+    let resolver =
+        StaticCatalogResolver::new().with("https://catalog.example/errors", error_catalog());
     let runtime = Runtime::builder()
         .with_catalog_resolver(Arc::new(resolver))
         .build()
@@ -44,7 +52,14 @@ do:
     .unwrap();
 
     let resolved = runtime.resolve_definition(&def).await.unwrap();
-    assert!(resolved.use_.as_ref().unwrap().errors.as_ref().unwrap().contains_key("catalogError"));
+    assert!(resolved
+        .use_
+        .as_ref()
+        .unwrap()
+        .errors
+        .as_ref()
+        .unwrap()
+        .contains_key("catalogError"));
 
     let wf = runtime.register_definition_resolved(&def).await.unwrap();
     let err = runtime.run(wf, Value::Null).await.unwrap_err();
@@ -79,22 +94,26 @@ do:
 
 #[tokio::test]
 async fn resolves_nested_catalogs() {
-    let mut inner = ComponentDefinitionCollection::default();
-    inner.secrets = Some(vec!["fromNested".to_string()]);
+    let inner = ComponentDefinitionCollection {
+        secrets: Some(vec!["fromNested".to_string()]),
+        ..Default::default()
+    };
 
-    let mut outer = ComponentDefinitionCollection::default();
-    outer.catalogs = Some(
-        [(
-            "nested".to_string(),
-            ows_runtime::dsl_models::CatalogDefinition {
-                endpoint: ows_runtime::dsl_models::OneOfEndpointDefinitionOrUri::Uri(
-                    "https://catalog.example/nested".to_string(),
-                ),
-            },
-        )]
-        .into_iter()
-        .collect(),
-    );
+    let outer = ComponentDefinitionCollection {
+        catalogs: Some(
+            [(
+                "nested".to_string(),
+                ows_runtime::dsl_models::CatalogDefinition {
+                    endpoint: ows_runtime::dsl_models::OneOfEndpointDefinitionOrUri::Uri(
+                        "https://catalog.example/nested".to_string(),
+                    ),
+                },
+            )]
+            .into_iter()
+            .collect(),
+        ),
+        ..Default::default()
+    };
 
     let resolver = StaticCatalogResolver::new()
         .with("https://catalog.example/outer", outer)

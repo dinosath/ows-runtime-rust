@@ -58,7 +58,10 @@ async fn cron_trigger_fires_on_schedule() {
     tokio::time::sleep(Duration::from_millis(1300)).await;
     let fired = set.triggered();
     set.cancel();
-    assert!(fired >= 1, "expected the cron schedule to fire, got {fired}");
+    assert!(
+        fired >= 1,
+        "expected the cron schedule to fire, got {fired}"
+    );
 }
 
 #[tokio::test]
@@ -81,7 +84,11 @@ async fn event_trigger_fires_on_matching_event() {
 
     // A non-matching event must not fire.
     broker
-        .publish(&ows_runtime_core::EventMessage::new("1", "src", "com.example.other"))
+        .publish(&ows_runtime_core::EventMessage::new(
+            "1",
+            "src",
+            "com.example.other",
+        ))
         .await
         .unwrap();
     tokio::time::sleep(Duration::from_millis(30)).await;

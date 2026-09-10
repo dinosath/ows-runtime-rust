@@ -28,6 +28,7 @@ YAML / JSON
    │  Deserialize (+ default normalization)
    ▼
 OWS Definition (serverless_workflow_core)
+   │  Catalog resolution (`use.catalogs`, optional)
    │  Schema / semantic validation
    ▼
 Validation report

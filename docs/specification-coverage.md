@@ -23,7 +23,7 @@ non-network ones.
 | `Try` task (catch, retry, do) | Try | ✅ | ✅ | ✅ | ✅ | |
 | `Raise` task | Raise | ✅ | ✅ | ✅ | ✅ | |
 | `Emit` task | Emit | ✅ | ✅ | ✅ | ✅ | |
-| `Listen` task | Listen | ✅ | ✅ | ✅ | 🚧 | `one`/`any`/`all`, `foreach`, correlation `from`/`expect` |
+| `Listen` task | Listen | ✅ | ✅ | ✅ | ✅ | `one`/`any`/`all`, `foreach`, correlation `from`/`expect` + cross-event grouping |
 | `Wait` task | Wait | ✅ | ✅ | ✅ | ✅ | |
 | `Call` task — HTTP | Call/HTTP | ✅ | ✅ | ✅ | 🚧 | network scenarios skip by default |
 | `Call` task — OpenAPI | Call/OpenAPI | ✅ | ✅ | ✅ | 🚧 | network |
@@ -42,40 +42,46 @@ non-network ones.
 | Timeout | Timeout | ✅ | ✅ | 🚧 | — | |
 | Cancellation | Cancellation | ✅ | ✅ | 🚧 | — | |
 | Events (CloudEvents, lifecycle) | Events | ✅ | ✅ | ✅ | — | in-memory broker |
-| Event-driven scheduling | Schedule | 🚧 | ✅ | 🚧 | — | |
-| Cron / every / after scheduling | Schedule | 🚧 | ✅ | 🚧 | — | |
+| Event-driven scheduling | Schedule | ✅ | ✅ | ✅ | — | `Runtime::start_schedules` fires `on` triggers |
+| Cron / every / after scheduling | Schedule | ✅ | ✅ | ✅ | — | fired end-to-end by `Runtime::start_schedules` |
 | Authentication (basic/bearer) | Authentication | ✅ | ✅ | ✅ | 🚧 | |
-| Secrets | Secrets | 🚧 | ✅ | 🚧 | — | declared but not enforced |
-| Extensions | Extensions | ❌ | — | — | — | |
-| Catalogs | Catalogs | ❌ | — | — | — | |
+| Secrets | Secrets | ✅ | ✅ | ✅ | — | `SecretResolver` (map/env); undeclared refs rejected at compile |
+| Extensions | Extensions | ✅ | ✅ | ✅ | — | `before`/`after`/`when`; `then: exit` short-circuits |
+| Catalogs | Catalogs | ✅ | ✅ | ✅ | — | `CatalogResolver` (static/file/HTTP), nested catalogs |
 | Runtime policy (deny-by-default) | Security | ✅ | ✅ | ✅ | — | |
-| Persistence (`ExecutionStore`) | Persistence | ✅ | ✅ | — | — | in-memory + SQLite/Postgres/Redis adapters in `ows-runtime-stores` |
-| Observability (tracing, lifecycle events) | Observability | ✅ | ✅ | ✅ | — | OTLP/HTTP JSON exporter in `ows-runtime-observability-otel` |
+| Persistence (`ExecutionStore`) | Persistence | ✅ | ✅ | ✅ | — | in-memory + SQLite/Postgres/Redis; per-task checkpoints + `Runtime::resume` |
+| Observability (tracing, lifecycle events) | Observability | ✅ | ✅ | ✅ | — | OTLP/HTTP JSON logs, spans and metrics in `ows-runtime-observability-otel` |
 
 ## Documented limitations
 
 - The gRPC adapter targets gRPC services exposed through a JSON transcoding /
-  HTTP gateway (the runtime does not embed protobuf code generation). AsyncAPI
-  and A2A/MCP adapters use HTTP/JSON transports (the AsyncAPI adapter publishes
-  over an HTTP channel binding). Full protobuf/HTTP-2 gRPC and broker-based
-  AsyncAPI require transport adapters and are opt-in.
+  HTTP gateway (the runtime does not embed protobuf code generation or a
+  `.proto` compiler). The official `.proto`-based gRPC examples therefore
+  require a native protobuf/HTTP-2 transport, which is not bundled. AsyncAPI
+  supports both an HTTP channel binding and a broker-based transport
+  (`transport.broker`) over the runtime's event publisher/consumer; A2A/MCP use
+  HTTP/JSON transports.
 - `run` container/script/shell require a `ProcessRunner` adapter and are
   deny-by-default.
-- `listen` filters support `correlate` `from`/`expect` matching (an event only
-  satisfies a filter when its extracted correlation value equals `expect`);
-  full cross-event correlation *grouping* (first-seen values, multi-key groups)
-  is not yet modelled.
-- Scheduling triggers are parsed; the runtime registers them via the
-  `Scheduler` trait but does not yet fire periodic executions end-to-end.
+- `listen` filters support `correlate` `from`/`expect` (with `expect` evaluated
+  against the workflow context) and cross-event correlation *grouping*: for
+  `all`, a first-seen key value becomes the expected value shared by subsequent
+  filters unless a filter declares an explicit `expect`.
+- Scheduling triggers (`every`/`after`/`cron`/`on`) fire end-to-end via
+  `Runtime::start_schedules`, which also registers each schedule with the
+  configured `Scheduler` trait. A durable/distributed scheduler can still be
+  layered on the trait for multi-node coordination.
 - `ows-runtime-stores` provides durable `ExecutionStore` backends (SQLite by
-  default; PostgreSQL and Redis behind features). The engine now persists an
-  execution's start record, terminal phase (running → completed/faulted/
-  cancelled) and `workflow.started`/terminal lifecycle events through the
-  configured store on every run (best-effort; store failures are logged, not
-  fatal). Full long-running *checkpoint/resume* is not yet implemented. A
-  durable-runtime integration test runs a workflow through `SqliteExecutionStore`
-  and reloads the persisted record (`all_records`) to prove it end to end.
+  default; PostgreSQL and Redis behind features). The engine persists an
+  execution's start record, per-top-level-task checkpoints (next index + scope
+  input + context), terminal phase and lifecycle events. `Runtime::resume`
+  reloads a non-terminal record and continues from the checkpoint, reusing the
+  execution id; checkpoints are at top-level task boundaries. Store failures are
+  logged, not fatal. Integration tests cover in-memory and SQLite resume.
 - `ows-runtime-observability-otel` exports lifecycle events to an
-  OpenTelemetry collector over OTLP/HTTP JSON, verified end to end against a
-  loopback OTLP/HTTP collector. A full tracing SDK (spans, metrics, OTLP/gRPC)
-  can be layered on the `EventPublisher` trait.
+  OpenTelemetry collector over OTLP/HTTP JSON as **logs, spans and metrics**,
+  verified end to end against a loopback OTLP/HTTP collector. OTLP/gRPC export
+  would require the OpenTelemetry OTLP/gRPC SDK or a protobuf transport and is
+  not bundled.
+- The `evaluate.language` is honored as `jq`; the `js` expression language is
+  parsed but not executed (the bundled engine is a sandboxed jq subset).

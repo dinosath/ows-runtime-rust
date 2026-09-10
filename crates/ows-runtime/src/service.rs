@@ -7,8 +7,8 @@ use std::sync::Arc;
 #[cfg(feature = "http")]
 use base64::Engine as _;
 use ows_runtime_core::{
-    ExpressionContext, ProcessResult, ProcessRunner, ServiceInvoker, ServiceRequest,
-    ServiceResponse, WorkflowError,
+    ErrorKind, ExpressionContext, ProblemDetails, ProcessResult, ProcessRunner, ServiceInvoker,
+    ServiceRequest, ServiceResponse, StandardErrorType, WorkflowError,
 };
 use serde_json::{json, Map, Value};
 
@@ -992,6 +992,115 @@ impl AsyncApiInvoker {
             other => Ok(other.clone()),
         }
     }
+
+    /// Publishes to or consumes from a message broker using the runtime's
+    /// `EventPublisher`/`EventConsumer` (broker-based AsyncAPI transport).
+    async fn invoke_broker(
+        &self,
+        target: &AsyncApiTarget<'_>,
+        args: &HashMap<String, Value>,
+        ctx: &ExpressionContext,
+    ) -> Result<Value, WorkflowError> {
+        let type_ = args
+            .get("type")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| target.channel.clone());
+        let message = args
+            .get("message")
+            .cloned()
+            .unwrap_or(Value::Object(Map::new()));
+
+        if target.kind == "publish" {
+            let mut event = ows_runtime_core::EventMessage::new(
+                self.inner.uuid.new_v4().to_string(),
+                target.channel.clone(),
+                type_,
+            );
+            event.data = Some(message);
+            self.inner.publisher.publish(&event).await?;
+            return Ok(json!({
+                "channel": target.channel,
+                "type": event.type_,
+                "published": true,
+            }));
+        }
+
+        // Subscribe: optionally filter events with the `subscription.filter`
+        // runtime expression, then consume `count` events (default 1).
+        let filter_source = args
+            .get("subscription")
+            .and_then(|s| s.get("filter"))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+        let compiled = filter_source
+            .map(|src| self.inner.expression.compile(&src))
+            .transpose()
+            .map_err(|e| {
+                WorkflowError::new(
+                    ErrorKind::Expression,
+                    ProblemDetails::standard(StandardErrorType::Expression)
+                        .with_detail(e.to_string()),
+                )
+            })?;
+        let vars = ctx.as_variable_map();
+        let expression = self.inner.expression.clone();
+        let vars_for_filter = vars.clone();
+
+        let subscription = self
+            .inner
+            .consumer
+            .subscribe(Box::new(
+                move |event: &ows_runtime_core::EventMessage| match &compiled {
+                    None => true,
+                    Some(compiled) => {
+                        let input = event.data.clone().unwrap_or(Value::Null);
+                        expression
+                            .evaluate(compiled, &input, &vars_for_filter)
+                            .map(|v| !matches!(v, Value::Bool(false) | Value::Null))
+                            .unwrap_or(false)
+                    }
+                },
+            ))
+            .await?;
+
+        let count = args
+            .get("subscription")
+            .and_then(|s| s.get("consume"))
+            .and_then(|c| c.get("count"))
+            .and_then(|v| v.as_u64())
+            .or_else(|| args.get("count").and_then(|v| v.as_u64()))
+            .unwrap_or(1)
+            .max(1) as usize;
+
+        let read = args.get("read").and_then(|v| v.as_str()).unwrap_or("data");
+
+        let mut consumed = Vec::new();
+        let mut envelopes = Vec::new();
+        for _ in 0..count {
+            match subscription.recv().await {
+                Some(event) => {
+                    envelopes.push(
+                        serde_json::to_value(ows_runtime_events::CloudEvent::from_message(&event))
+                            .unwrap_or(Value::Null),
+                    );
+                    consumed.push(event.data.clone().unwrap_or(Value::Null));
+                }
+                None => break,
+            }
+        }
+
+        let values = if read == "envelope" {
+            envelopes
+        } else {
+            consumed
+        };
+        if count == 1 {
+            Ok(values.into_iter().next().unwrap_or(Value::Null))
+        } else {
+            Ok(Value::Array(values))
+        }
+    }
 }
 
 #[cfg(feature = "http")]
@@ -1027,6 +1136,18 @@ impl FunctionInvoker for AsyncApiInvoker {
             .ok_or_else(|| crate::error::semantic_error("asyncapi document has no channels"))?;
 
         let target = resolve_asyncapi_operation(channels, operation_id, channel_name)?;
+
+        // Broker-based transport: when the call declares a broker transport (or
+        // no HTTP server is available), publish/consume through the runtime's
+        // `EventPublisher`/`EventConsumer` instead of an HTTP channel binding.
+        let wants_broker = args
+            .get("transport")
+            .and_then(|t| t.get("broker"))
+            .is_some()
+            || args.get("broker").is_some();
+        if wants_broker {
+            return self.invoke_broker(&target, args, req.context).await;
+        }
 
         // Determine the endpoint: explicit override, the channel's server url
         // (from the document origin) or the operation's HTTP server binding.
@@ -1101,7 +1222,7 @@ impl FunctionInvoker for AsyncApiInvoker {
 struct AsyncApiTarget<'a> {
     channel: String,
     path: &'a str,
-    _kind: &'a str,
+    kind: &'a str,
 }
 
 /// Resolves a channel operation (by operationId or by channel name) within an
@@ -1131,7 +1252,7 @@ fn resolve_asyncapi_operation<'a>(
                 return Ok(AsyncApiTarget {
                     channel: name.clone(),
                     path,
-                    _kind: op_kind,
+                    kind: op_kind,
                 });
             }
         }

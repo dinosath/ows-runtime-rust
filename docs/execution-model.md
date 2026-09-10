@@ -73,6 +73,39 @@ Runtime expressions are evaluated by a sandboxed `jq`-subset interpreter. The
 and `$authorization` arguments are provided per the spec's argument availability
 table. Loop variables (`$each`, `$index`) are exposed via the context.
 
+## Extensions, catalogs and secrets
+
+- **Extensions** (`use.extensions`): each extension targets a task type (`extend`)
+  and optionally a `when` guard evaluated against the task's scope input. Its
+  `before` tasks run before the task body and its `after` tasks after the output
+  transform. A `before` task with `then: exit` short-circuits the extended task
+  body and returns the extension output. Extensions never extend themselves.
+- **Catalogs** (`use.catalogs`): `Runtime::resolve_definition` fetches each
+  catalog endpoint through the configured `CatalogResolver` and merges the
+  imported functions/errors/retries/timeouts/authentications/extensions/secrets
+  (including nested catalogs) into `use` before compilation. Offline resolvers
+  (static/file) and an HTTP resolver are bundled.
+- **Secrets** (`use.secrets`): declared secret names are resolved through the
+  configured `SecretResolver` and exposed as `$secrets`. A reference to a secret
+  that is not declared fails compilation.
+
+## Scheduling
+
+A workflow may declare a `schedule` (`every`, `after`, `cron`, or `on` events).
+`Runtime::start_schedules` starts one loop per registered schedule: interval and
+cron triggers sleep on the injected `Clock` and fire executions, while event
+triggers subscribe to the `EventConsumer` and fire on matching events (with the
+event envelope as `$workflow.input[0]`). The returned `ScheduleSet` is
+cancellable and exposes a triggered counter.
+
+## Checkpoint and resume
+
+After each top-level task the engine persists a checkpoint (the next top-level
+task index, the scope input and the current context) through the
+`ExecutionStore`. `Runtime::resume` loads a non-terminal record, restores the
+context and input, and continues from the checkpoint with the original
+execution id.
+
 ## Execution identifiers
 
 Each workflow execution and each task execution has a stable identifier. The

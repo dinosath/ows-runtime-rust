@@ -16,7 +16,8 @@ use ows_runtime_core::{ErrorKind, ProblemDetails, StandardErrorType, WorkflowErr
 #[async_trait::async_trait]
 pub trait CatalogResolver: Send + Sync {
     /// Fetches and decodes the catalog at `endpoint`.
-    async fn resolve(&self, endpoint: &str) -> Result<ComponentDefinitionCollection, WorkflowError>;
+    async fn resolve(&self, endpoint: &str)
+        -> Result<ComponentDefinitionCollection, WorkflowError>;
 }
 
 fn catalog_error(detail: String) -> WorkflowError {
@@ -71,7 +72,11 @@ impl StaticCatalogResolver {
     }
 
     /// Registers a catalog and returns the resolver (builder style).
-    pub fn with(mut self, endpoint: impl Into<String>, catalog: ComponentDefinitionCollection) -> Self {
+    pub fn with(
+        mut self,
+        endpoint: impl Into<String>,
+        catalog: ComponentDefinitionCollection,
+    ) -> Self {
         self.insert(endpoint, catalog);
         self
     }
@@ -79,7 +84,10 @@ impl StaticCatalogResolver {
 
 #[async_trait::async_trait]
 impl CatalogResolver for StaticCatalogResolver {
-    async fn resolve(&self, endpoint: &str) -> Result<ComponentDefinitionCollection, WorkflowError> {
+    async fn resolve(
+        &self,
+        endpoint: &str,
+    ) -> Result<ComponentDefinitionCollection, WorkflowError> {
         self.catalogs
             .get(endpoint)
             .cloned()
@@ -93,11 +101,13 @@ pub struct FileCatalogResolver;
 
 #[async_trait::async_trait]
 impl CatalogResolver for FileCatalogResolver {
-    async fn resolve(&self, endpoint: &str) -> Result<ComponentDefinitionCollection, WorkflowError> {
+    async fn resolve(
+        &self,
+        endpoint: &str,
+    ) -> Result<ComponentDefinitionCollection, WorkflowError> {
         let path = endpoint.strip_prefix("file://").unwrap_or(endpoint);
-        let text = std::fs::read_to_string(path).map_err(|e| {
-            catalog_error(format!("failed to read catalog `{endpoint}`: {e}"))
-        })?;
+        let text = std::fs::read_to_string(path)
+            .map_err(|e| catalog_error(format!("failed to read catalog `{endpoint}`: {e}")))?;
         parse_catalog_document(&text)
     }
 }
@@ -129,7 +139,10 @@ impl Default for HttpCatalogResolver {
 #[cfg(feature = "http")]
 #[async_trait::async_trait]
 impl CatalogResolver for HttpCatalogResolver {
-    async fn resolve(&self, endpoint: &str) -> Result<ComponentDefinitionCollection, WorkflowError> {
+    async fn resolve(
+        &self,
+        endpoint: &str,
+    ) -> Result<ComponentDefinitionCollection, WorkflowError> {
         let response = self
             .client
             .get(endpoint)
@@ -142,9 +155,10 @@ impl CatalogResolver for HttpCatalogResolver {
                 "catalog `{endpoint}` returned status {status}"
             )));
         }
-        let text = response.text().await.map_err(|e| {
-            catalog_error(format!("failed to read catalog `{endpoint}`: {e}"))
-        })?;
+        let text = response
+            .text()
+            .await
+            .map_err(|e| catalog_error(format!("failed to read catalog `{endpoint}`: {e}")))?;
         parse_catalog_document(&text)
     }
 }
@@ -183,8 +197,10 @@ errors:
     #[tokio::test]
     async fn static_resolver_resolves_known_endpoint() {
         let mut r = StaticCatalogResolver::new();
-        let mut c = ComponentDefinitionCollection::default();
-        c.secrets = Some(vec!["s".into()]);
+        let c = ComponentDefinitionCollection {
+            secrets: Some(vec!["s".into()]),
+            ..Default::default()
+        };
         r.insert("https://cat", c);
         assert!(r.resolve("https://cat").await.is_ok());
         assert!(r.resolve("https://missing").await.is_err());
@@ -194,7 +210,11 @@ errors:
     async fn file_resolver_reads_catalog() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!("ows-catalog-{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"errors":{"e":{"type":"t","title":"T","status":400}}}"#).unwrap();
+        std::fs::write(
+            &path,
+            r#"{"errors":{"e":{"type":"t","title":"T","status":400}}}"#,
+        )
+        .unwrap();
         let r = FileCatalogResolver;
         let c = r.resolve(path.to_str().unwrap()).await.unwrap();
         assert!(c.errors.unwrap().contains_key("e"));

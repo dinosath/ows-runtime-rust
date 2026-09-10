@@ -43,7 +43,10 @@ async fn resume_continues_from_checkpoint_and_completes() {
         .await
         .unwrap();
 
-    let runtime = Runtime::builder().with_store(store.clone()).build().unwrap();
+    let runtime = Runtime::builder()
+        .with_store(store.clone())
+        .build()
+        .unwrap();
     let def = ows_runtime_dsl::from_yaml(definition()).unwrap();
     runtime.register_definition(&def).unwrap();
 
@@ -63,7 +66,10 @@ async fn resume_falls_back_to_context_when_pointer_has_no_input() {
         .await
         .unwrap();
 
-    let runtime = Runtime::builder().with_store(store.clone()).build().unwrap();
+    let runtime = Runtime::builder()
+        .with_store(store.clone())
+        .build()
+        .unwrap();
     let def = ows_runtime_dsl::from_yaml(definition()).unwrap();
     runtime.register_definition(&def).unwrap();
 
@@ -80,7 +86,10 @@ async fn resume_rejects_terminal_executions() {
         .await
         .unwrap();
 
-    let runtime = Runtime::builder().with_store(store.clone()).build().unwrap();
+    let runtime = Runtime::builder()
+        .with_store(store.clone())
+        .build()
+        .unwrap();
     let def = ows_runtime_dsl::from_yaml(definition()).unwrap();
     runtime.register_definition(&def).unwrap();
 
@@ -110,7 +119,10 @@ async fn resume_requires_the_workflow_to_be_registered() {
         .await
         .unwrap();
 
-    let runtime = Runtime::builder().with_store(store.clone()).build().unwrap();
+    let runtime = Runtime::builder()
+        .with_store(store.clone())
+        .build()
+        .unwrap();
     let err = runtime.resume("exec-1").await.unwrap_err();
     assert!(err
         .problem

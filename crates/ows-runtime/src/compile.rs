@@ -867,6 +867,48 @@ do:
     }
 
     #[test]
+    fn compiles_listen_until_forms() {
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - l:
+      listen:
+        to:
+          any: []
+          until: '. | length >= 3'
+"#,
+        );
+        if let CompiledTaskKind::Listen(l) = &wf.tasks[0].kind {
+            assert!(matches!(l.until, Some(ListenUntil::Expression(_))));
+        } else {
+            panic!("expected listen");
+        }
+
+        let wf = compile_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - l:
+      listen:
+        to:
+          any: []
+          until:
+            one:
+              with: { type: com.example.stop }
+"#,
+        );
+        if let CompiledTaskKind::Listen(l) = &wf.tasks[0].kind {
+            match &l.until {
+                Some(ListenUntil::Strategy(filters)) => assert_eq!(filters.len(), 1),
+                other => panic!("expected until strategy, got {other:?}"),
+            }
+        } else {
+            panic!("expected listen");
+        }
+    }
+
+    #[test]
     fn compiles_listen_config() {
         let wf = compile_yaml(
             r#"

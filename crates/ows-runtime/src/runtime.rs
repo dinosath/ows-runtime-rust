@@ -237,6 +237,14 @@ impl Runtime {
             if !visited.insert(uri.clone()) {
                 continue;
             }
+            // Catalog endpoints fetched over the network are subject to the
+            // runtime's network policy (deny-by-default).
+            #[cfg(feature = "http")]
+            if resolver.requires_network()
+                && (uri.starts_with("http://") || uri.starts_with("https://"))
+            {
+                crate::service::enforce_network_policy(&self.inner, &uri)?;
+            }
             let collection = resolver.resolve(&uri).await?;
             // Queue any catalogs the imported collection declares.
             if let Some(nested) = &collection.catalogs {

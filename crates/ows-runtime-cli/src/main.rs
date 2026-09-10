@@ -38,6 +38,25 @@ enum Command {
         /// The workflow input as a YAML/JSON file.
         #[arg(long)]
         input: Option<PathBuf>,
+        /// Allow outbound network access (deny-by-default).
+        #[arg(long)]
+        allow_network: bool,
+        /// Allow shell/script execution for `run` tasks (deny-by-default).
+        #[arg(long)]
+        allow_scripts: bool,
+        /// Allow container execution for `run` tasks via Docker (deny-by-default).
+        #[arg(long)]
+        allow_containers: bool,
+        /// A secret as `NAME=VALUE` (repeatable), exposed as `$secrets`.
+        #[arg(long = "secret", value_name = "NAME=VALUE")]
+        secrets: Vec<String>,
+        /// A catalog as `ENDPOINT=PATH` (repeatable); the file is parsed and
+        /// served for the workflow's `use.catalogs` endpoint.
+        #[arg(long = "catalog", value_name = "ENDPOINT=PATH")]
+        catalogs: Vec<String>,
+        /// Enable the filesystem catalog resolver (for `file://` endpoints).
+        #[arg(long)]
+        catalog_files: bool,
     },
     /// Runs the OWS Conformance Test Kit against this runtime.
     Conformance {
@@ -104,7 +123,16 @@ async fn main() {
             });
             println!("{}", serde_json::to_string_pretty(&summary).unwrap());
         }
-        Command::Run { file, input } => {
+        Command::Run {
+            file,
+            input,
+            allow_network,
+            allow_scripts,
+            allow_containers,
+            secrets,
+            catalogs,
+            catalog_files,
+        } => {
             let def = ows_runtime_dsl::from_file(&file).unwrap_or_else(|e| {
                 eprintln!("error: {e}");
                 std::process::exit(1);
@@ -116,10 +144,70 @@ async fn main() {
                 }
                 std::process::exit(1);
             }
-            let runtime = ows_runtime::Runtime::builder()
-                .build()
-                .expect("runtime build");
-            let wf = runtime.register_definition(&def).expect("compile");
+
+            let policy = ows_runtime_core::RuntimePolicy {
+                allow_network,
+                ..Default::default()
+            };
+            let mut builder = ows_runtime::Runtime::builder().with_policy(policy);
+
+            if allow_scripts || allow_containers {
+                let mut runner = ows_runtime::TokioProcessRunner::new();
+                if allow_scripts {
+                    runner = runner.allow_scripts();
+                }
+                if allow_containers {
+                    runner = runner.allow_containers();
+                }
+                builder = builder.with_process(std::sync::Arc::new(runner));
+            }
+
+            let mut secret_map = std::collections::HashMap::new();
+            for spec in &secrets {
+                match spec.split_once('=') {
+                    Some((name, value)) => {
+                        secret_map.insert(name.to_string(), value.to_string());
+                    }
+                    None => {
+                        eprintln!("error: --secret must be NAME=VALUE, got `{spec}`");
+                        std::process::exit(1);
+                    }
+                }
+            }
+            if !secret_map.is_empty() {
+                builder = builder.with_secrets(secret_map);
+            }
+
+            if catalog_files && catalogs.is_empty() {
+                builder = builder.with_catalog_resolver(std::sync::Arc::new(
+                    ows_runtime::catalog::FileCatalogResolver,
+                ));
+            } else if !catalogs.is_empty() {
+                let mut resolver = ows_runtime::catalog::StaticCatalogResolver::new();
+                for spec in &catalogs {
+                    let Some((endpoint, path)) = spec.split_once('=') else {
+                        eprintln!("error: --catalog must be ENDPOINT=PATH, got `{spec}`");
+                        std::process::exit(1);
+                    };
+                    let text = std::fs::read_to_string(path).unwrap_or_else(|e| {
+                        eprintln!("error: read catalog `{path}`: {e}");
+                        std::process::exit(1);
+                    });
+                    let collection = ows_runtime::catalog::parse_catalog_document(&text)
+                        .unwrap_or_else(|e| {
+                            eprintln!("error: parse catalog `{path}`: {e}");
+                            std::process::exit(1);
+                        });
+                    resolver.insert(endpoint, collection);
+                }
+                builder = builder.with_catalog_resolver(std::sync::Arc::new(resolver));
+            }
+
+            let runtime = builder.build().expect("runtime build");
+            let wf = runtime
+                .register_definition_resolved(&def)
+                .await
+                .expect("compile");
             let input = match input {
                 Some(path) => {
                     let text = std::fs::read_to_string(&path).expect("read input");

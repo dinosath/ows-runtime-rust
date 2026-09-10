@@ -18,6 +18,12 @@ pub trait CatalogResolver: Send + Sync {
     /// Fetches and decodes the catalog at `endpoint`.
     async fn resolve(&self, endpoint: &str)
         -> Result<ComponentDefinitionCollection, WorkflowError>;
+
+    /// Whether this resolver performs network access, and is therefore subject
+    /// to the runtime's network policy. Defaults to `false`.
+    fn requires_network(&self) -> bool {
+        false
+    }
 }
 
 fn catalog_error(detail: String) -> WorkflowError {
@@ -139,6 +145,10 @@ impl Default for HttpCatalogResolver {
 #[cfg(feature = "http")]
 #[async_trait::async_trait]
 impl CatalogResolver for HttpCatalogResolver {
+    fn requires_network(&self) -> bool {
+        true
+    }
+
     async fn resolve(
         &self,
         endpoint: &str,

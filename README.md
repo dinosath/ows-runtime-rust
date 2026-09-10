@@ -151,6 +151,17 @@ cargo run -p ows-runtime-cli -- run workflow.yaml --input input.yaml
 cargo run -p ows-runtime-cli -- conformance --ctk <path-to-ctk-features>
 ```
 
+`run` accepts the same opt-ins as the library, so capabilities stay
+deny-by-default:
+
+```sh
+cargo run -p ows-runtime-cli -- run workflow.yaml \
+  --allow-network \
+  --allow-scripts \
+  --secret token=abc123 \
+  --catalog https://catalog.example/components=./catalog.yaml
+```
+
 ## Testing
 
 ```sh

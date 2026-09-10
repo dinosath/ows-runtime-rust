@@ -51,6 +51,14 @@
   and unary calls over `tonic`. The `grpc` function dispatches to it when the
   call supplies a `proto` descriptor, else to the JSON/gateway adapter.
 - Inline `for.in` collections are normalized so the official examples parse.
+- CLI `run` opt-ins mirroring the library: `--allow-network`, `--allow-scripts`,
+  `--allow-containers`, `--secret NAME=VALUE`, `--catalog ENDPOINT=PATH` and
+  `--catalog-files`; catalogs are resolved through `register_definition_resolved`.
+- HTTP catalog endpoints are now subject to the runtime network policy
+  (deny-by-default); the `CatalogResolver` trait exposes `requires_network`.
+- Acceptance tests driving the public CLI binary (validate/compile/run/secrets/
+  catalogs/scripts/faults) and HTTP catalog boundary tests against a loopback
+  server.
 - Data-driven tests: the official OWS CTK features and examples are vendored
   and executed in offline CI, plus a case-file suite under
   `crates/ows-runtime/tests/fixtures/cases`.

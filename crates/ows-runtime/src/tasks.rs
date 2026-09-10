@@ -38,7 +38,7 @@ pub(crate) async fn dispatch(
     let output = match &task.kind {
         CompiledTaskKind::Set(d) => task_set(inner, d, expr_ctx)?,
         CompiledTaskKind::Do(body) => {
-            exec_scope(inner, workflow, body, exec_ctx, task_input).await?
+            exec_scope(inner, workflow, body, exec_ctx, task_input, None).await?
         }
         CompiledTaskKind::For(d) => {
             task_for(inner, workflow, d, task_input, expr_ctx, exec_ctx).await?
@@ -145,7 +145,7 @@ async fn task_for(
             }
         }
 
-        let body_output = exec_scope(inner, workflow, &def.body, exec_ctx, &body_input).await?;
+        let body_output = exec_scope(inner, workflow, &def.body, exec_ctx, &body_input, None).await?;
         output = body_output.clone();
         body_input = body_output;
 
@@ -304,7 +304,7 @@ async fn task_try(
             return Err(WorkflowError::cancelled().with_execution(exec_ctx.execution_id.clone()));
         }
 
-        match exec_scope(inner, workflow, &def.body, exec_ctx, task_input).await {
+        match exec_scope(inner, workflow, &def.body, exec_ctx, task_input, None).await {
             Ok(output) => return Ok(output),
             Err(err) => {
                 set_error_var(exec_ctx, catch, &err);
@@ -335,7 +335,7 @@ async fn task_try(
 
                 if let Some(do_tasks) = &catch.do_ {
                     let handler_output =
-                        exec_scope(inner, workflow, do_tasks, exec_ctx, task_input).await?;
+                        exec_scope(inner, workflow, do_tasks, exec_ctx, task_input, None).await?;
                     return Ok(handler_output);
                 }
 
@@ -729,7 +729,7 @@ async fn foreach_listen(
         exec_ctx.loop_vars.insert(fe.item.clone(), item.clone());
         exec_ctx.loop_vars.insert(at_name.clone(), json!(i));
 
-        let body_output = exec_scope(inner, workflow, &fe.body, exec_ctx, &item).await?;
+        let body_output = exec_scope(inner, workflow, &fe.body, exec_ctx, &item, None).await?;
         outputs.push(body_output);
 
         exec_ctx.loop_vars.remove(&fe.item);

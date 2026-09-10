@@ -5,9 +5,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ows_runtime_core::{
-    Clock, EventConsumer, EventPublisher, ExecutionStore, InMemoryExecutionStore, ProcessRunner,
-    RandomGenerator, RuntimeInfo, RuntimePolicy, Scheduler, SecretResolver, ServiceInvoker,
-    SystemClock, UuidGenerator, WorkflowError,
+    Clock, ErrorKind, EventConsumer, EventPublisher, ExecutionStore, InMemoryExecutionStore,
+    ProblemDetails, ProcessRunner, RandomGenerator, RuntimeInfo, RuntimePolicy, Scheduler,
+    SecretResolver, ServiceInvoker, StandardErrorType, SystemClock, UuidGenerator, WorkflowError,
 };
 use serverless_workflow_core::models::workflow::WorkflowDefinition;
 use tokio::sync::{oneshot, Notify};
@@ -293,12 +293,89 @@ impl Runtime {
         self.execute(workflow, input).await?.wait().await
     }
 
+    /// Resumes a previously checkpointed execution through the configured
+    /// [`ExecutionStore`].
+    ///
+    /// The workflow must still be registered (by its `namespace/name/version`
+    /// key) and the execution must not be terminal. Execution continues from the
+    /// checkpointed top-level task index with the checkpointed context and
+    /// input, reusing the original execution id.
+    pub async fn resume(
+        &self,
+        execution_id: &str,
+    ) -> Result<serde_json::Value, WorkflowError> {
+        let record = self
+            .inner
+            .store
+            .load(execution_id)
+            .await?
+            .ok_or_else(|| unknown_execution(execution_id))?;
+
+        if record.phase.is_terminal() {
+            return Err(runtime_detail(format!(
+                "execution `{execution_id}` is already {} and cannot be resumed",
+                record.phase
+            )));
+        }
+
+        let workflow = self
+            .inner
+            .workflow(&record.workflow)
+            .ok_or_else(|| runtime_detail(format!(
+                "workflow `{}` is not registered; register it before resuming",
+                record.workflow
+            )))?;
+
+        let next_index = record
+            .pointer
+            .get("next")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(0) as usize;
+        let input = record
+            .pointer
+            .get("input")
+            .cloned()
+            .unwrap_or_else(|| record.context.clone());
+
+        let resume = engine::ResumeState {
+            next_index,
+            input,
+            context: record.context.clone(),
+        };
+
+        let cancel = Arc::new(Cancellation::new());
+        engine::execute_with(
+            self.inner.clone(),
+            workflow,
+            serde_json::Value::Null,
+            cancel,
+            engine::ExecutionOptions {
+                execution_id: Some(record.execution_id.clone()),
+                resume: Some(resume),
+            },
+        )
+        .await
+    }
+
     /// Clears and returns the recorded task execution order.
     ///
     /// Used by conformance and integration tests to assert task ordering.
     pub fn take_task_order(&self) -> Vec<String> {
         self.inner.take_task_order()
     }
+}
+
+/// Builds a runtime-category [`WorkflowError`] with a detail message.
+fn runtime_detail(detail: String) -> WorkflowError {
+    WorkflowError::new(
+        ErrorKind::Runtime,
+        ProblemDetails::standard(StandardErrorType::Runtime).with_detail(detail),
+    )
+}
+
+/// The error returned when an execution id is unknown.
+fn unknown_execution(execution_id: &str) -> WorkflowError {
+    runtime_detail(format!("unknown execution `{execution_id}`"))
 }
 
 /// Extracts the URI from a catalog endpoint definition.

@@ -127,6 +127,34 @@ impl ExecContext {
     }
 }
 
+/// Options controlling an execution.
+#[derive(Default)]
+pub(crate) struct ExecutionOptions {
+    /// A stable execution id to reuse when resuming.
+    pub execution_id: Option<String>,
+    /// Resume state, if resuming a partially executed workflow.
+    pub resume: Option<ResumeState>,
+}
+
+/// Resume state loaded from a durable checkpoint.
+#[derive(Debug, Clone)]
+pub(crate) struct ResumeState {
+    /// The top-level task index to resume from.
+    pub next_index: usize,
+    /// The input to feed the resumed scope.
+    pub input: Value,
+    /// The workflow context at the checkpoint.
+    pub context: Value,
+}
+
+/// Top-level scope checkpoint configuration.
+pub(crate) struct ScopeCheckpoint {
+    /// The index of the first task to execute.
+    pub start_index: usize,
+    /// The execution start time.
+    pub started_at: i64,
+}
+
 /// Executes a compiled workflow with the given raw input.
 pub(crate) async fn execute(
     inner: Arc<RuntimeInner>,
@@ -134,7 +162,29 @@ pub(crate) async fn execute(
     raw_input: Value,
     cancel: Arc<Cancellation>,
 ) -> Result<Value, WorkflowError> {
-    let execution_id = inner.uuid.new_v4().to_string();
+    execute_with(
+        inner,
+        workflow,
+        raw_input,
+        cancel,
+        ExecutionOptions::default(),
+    )
+    .await
+}
+
+/// Executes a compiled workflow, optionally reusing an execution id and
+/// resuming from a durable checkpoint.
+pub(crate) async fn execute_with(
+    inner: Arc<RuntimeInner>,
+    workflow: Arc<CompiledWorkflow>,
+    raw_input: Value,
+    cancel: Arc<Cancellation>,
+    options: ExecutionOptions,
+) -> Result<Value, WorkflowError> {
+    let execution_id = options
+        .execution_id
+        .clone()
+        .unwrap_or_else(|| inner.uuid.new_v4().to_string());
     let started_at = inner.clock.epoch_seconds();
 
     let workflow_descriptor = json!({
@@ -167,33 +217,42 @@ pub(crate) async fn execute(
         version: workflow.id.version.clone(),
     };
 
-    tracing::info!(execution.id = %execution_id, workflow.name = %workflow.id.name, workflow.namespace = %workflow.id.namespace, workflow.version = %workflow.id.version, "workflow.started");
-
-    // Emit workflow started lifecycle event.
-    inner
-        .lifecycle()
-        .workflow_started(&wf_ref, &execution_id, &iso_time(started_at))
-        .await
-        .ok();
-
-    // 1. Validate + transform workflow input.
-    let transformed_input = apply_workflow_input(&inner, &workflow, &ctx, raw_input).await?;
-
-    // Set the initial context and first task input.
-    ctx.set_context(transformed_input.clone()).await;
-
-    // Record the start of the execution in the durable store (best-effort).
-    persist_started(&inner, &workflow, &ctx, &execution_id, started_at).await;
-
+    // 1. Determine the scope entry point. On a fresh run, emit the started
+    //    lifecycle event, run the input pipeline and persist the start record.
+    //    On resume, restore the checkpointed context and input.
+    let (scope_input, start_index) = match &options.resume {
+        Some(resume) => {
+            tracing::info!(execution.id = %execution_id, "workflow.resumed");
+            ctx.set_context(resume.context.clone()).await;
+            (resume.input.clone(), resume.next_index)
+        }
+        None => {
+            tracing::info!(execution.id = %execution_id, workflow.name = %workflow.id.name, workflow.namespace = %workflow.id.namespace, workflow.version = %workflow.id.version, "workflow.started");
+            inner
+                .lifecycle()
+                .workflow_started(&wf_ref, &execution_id, &iso_time(started_at))
+                .await
+                .ok();
+            let transformed = apply_workflow_input(&inner, &workflow, &ctx, raw_input).await?;
+            ctx.set_context(transformed.clone()).await;
+            persist_started(&inner, &workflow, &ctx, &execution_id, started_at).await;
+            (transformed, 0)
+        }
+    };
     // 2. Execute the top-level scope, then transform + validate output. Faults
     //    are captured so the durable store records the terminal phase.
+    let checkpoint = ScopeCheckpoint {
+        start_index,
+        started_at,
+    };
     let outcome = async {
         let scope_output = exec_scope(
             &inner,
             &workflow,
             &workflow.tasks,
             &mut ctx,
-            &transformed_input,
+            &scope_input,
+            Some(&checkpoint),
         )
         .await?;
         apply_workflow_output(&inner, &workflow, &ctx, scope_output).await
@@ -276,7 +335,7 @@ async fn persist_started(
     execution_id: &str,
     started_at: i64,
 ) {
-    let record = execution_record(
+    let mut record = execution_record(
         workflow,
         ctx,
         execution_id,
@@ -284,6 +343,7 @@ async fn persist_started(
         None,
         started_at,
     );
+    record.pointer = json!({ "next": 0, "input": ctx.context_value_sync() });
     if let Err(e) = inner.store.create(record).await {
         tracing::warn!(execution.id = %execution_id, error = %e, "failed to persist execution start");
     }
@@ -296,6 +356,36 @@ async fn persist_started(
     };
     if let Err(e) = inner.store.append_event(event).await {
         tracing::warn!(execution.id = %execution_id, error = %e, "failed to persist workflow.started event");
+    }
+}
+
+/// Persists a top-level progress checkpoint (best-effort).
+///
+/// The record's `pointer` stores the index of the next top-level task and the
+/// input to feed it, so [`crate::Runtime::resume`] can continue the workflow
+/// from where it stopped.
+async fn persist_checkpoint(
+    inner: &Arc<RuntimeInner>,
+    workflow: &Arc<CompiledWorkflow>,
+    ctx: &ExecContext,
+    started_at: i64,
+    next_index: usize,
+    input: &Value,
+) {
+    let record = ExecutionRecord {
+        execution_id: ctx.execution_id.clone(),
+        workflow: workflow.id.key(),
+        namespace: workflow.id.namespace.clone(),
+        name: workflow.id.name.clone(),
+        version: workflow.id.version.clone(),
+        phase: Phase::Running,
+        context: ctx.context_value_sync(),
+        pointer: json!({ "next": next_index, "input": input }),
+        error: None,
+        started_at,
+    };
+    if let Err(e) = inner.store.update(&record).await {
+        tracing::warn!(execution.id = %ctx.execution_id, error = %e, "failed to persist execution checkpoint");
     }
 }
 
@@ -384,9 +474,10 @@ pub(crate) fn exec_scope<'a>(
     tasks: &'a [CompiledTask],
     ctx: &'a mut ExecContext,
     initial_input: &'a Value,
+    checkpoint: Option<&'a ScopeCheckpoint>,
 ) -> BoxFut<'a, Result<Value, WorkflowError>> {
     Box::pin(async move {
-        let mut index: usize = 0;
+        let mut index: usize = checkpoint.map(|c| c.start_index).unwrap_or(0);
         let mut input = initial_input.clone();
 
         loop {
@@ -454,6 +545,12 @@ pub(crate) fn exec_scope<'a>(
                     ctx.ended.store(true, Ordering::SeqCst);
                     return Ok(input);
                 }
+            }
+
+            // Persist progress after each task in the top-level scope so a
+            // partially executed workflow can be resumed.
+            if let Some(cp) = checkpoint {
+                persist_checkpoint(inner, workflow, ctx, cp.started_at, index, &input).await;
             }
         }
     })
@@ -661,7 +758,7 @@ async fn run_extension_scope(
     let previous = ctx.apply_extensions;
     ctx.apply_extensions = false;
     ctx.scope_exited = false;
-    let result = exec_scope(inner, workflow, scope, ctx, input).await;
+    let result = exec_scope(inner, workflow, scope, ctx, input, None).await;
     let exited = ctx.scope_exited;
     ctx.scope_exited = false;
     ctx.apply_extensions = previous;

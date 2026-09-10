@@ -47,7 +47,7 @@ non-network ones.
 | Authentication (basic/bearer) | Authentication | ✅ | ✅ | ✅ | 🚧 | inline `basic`/`bearer` only; `oauth2`/`oidc`/`certificate`/`digest` are not implemented |
 | Secrets | Secrets | ✅ | ✅ | ✅ | — | `SecretResolver` (map/env); undeclared refs rejected at compile |
 | Extensions | Extensions | ✅ | ✅ | ✅ | — | `before`/`after`/`when`; `then: exit` short-circuits |
-| Catalogs | Catalogs | ✅ | ✅ | ✅ | — | `CatalogResolver` (static/file/HTTP), nested catalogs |
+| Catalogs | Catalogs | ✅ | ✅ | ✅ | — | `CatalogResolver` (static/file/HTTP), nested catalogs; `call` by URL is not resolved |
 | Runtime policy (deny-by-default) | Security | ✅ | ✅ | ✅ | — | |
 | Persistence (`ExecutionStore`) | Persistence | ✅ | ✅ | ✅ | — | in-memory + SQLite/Postgres/Redis; per-task checkpoints + `Runtime::resume` |
 | Observability (tracing, lifecycle events) | Observability | ✅ | ✅ | ✅ | — | OTLP/HTTP JSON + OTLP/gRPC (`otlp-grpc`) logs, spans and metrics |
@@ -93,6 +93,9 @@ non-network ones.
   `tonic` collector implementing the generated `LogsService`).
 - The `evaluate.language` is honored as `jq`; the `js` expression language is
   parsed but not executed (the bundled engine is a sandboxed jq subset).
+- A `call` function referenced by URL (e.g. a remote catalog `function.yaml`) is
+  not fetched; declare the function in `use.functions` or import it through a
+  `use.catalogs` catalog and call it by name.
 - Endpoint authentication supports inline `basic` and `bearer` schemes. `oauth2`,
   `oidc`, `certificate` and `digest` are recognized by the model but not
   applied, and `use`-referenced authentication policies are not resolved (the

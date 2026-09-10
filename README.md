@@ -31,8 +31,9 @@ those are adapters behind stable core traits.
   PostgreSQL, Redis) live in `ows-runtime-stores`, and the engine persists each
   execution's start record, per-task checkpoints, terminal phase and lifecycle
   events through the configured store, so interrupted executions can be resumed
-  with `Runtime::resume`. An OpenTelemetry OTLP/HTTP JSON exporter for
-  lifecycle logs, spans and metrics lives in `ows-runtime-observability-otel`.
+  with `Runtime::resume`. `ows-runtime-observability-otel` exports lifecycle
+  logs, spans and metrics over OTLP/HTTP JSON, and OTLP/gRPC behind the
+  `otlp-grpc` feature.
 - **Experimental / opt-in transports**: the `grpc` adapter targets gRPC services
   exposed through a JSON/gateway endpoint, and (behind the `grpc-native`
   feature) natively over protobuf/HTTP-2 by compiling the workflow's `.proto` at
@@ -200,7 +201,8 @@ Roadmap items implemented:
   (SQLite by default; PostgreSQL and Redis behind the `postgres`/`redis`
   features), including per-task **checkpointing and `Runtime::resume`**.
 - OpenTelemetry integration crate (`ows-runtime-observability-otel`) that
-  exports lifecycle events as OTLP/HTTP JSON **logs, spans and metrics**.
+  exports lifecycle events as OTLP/HTTP JSON **logs, spans and metrics**, plus
+  OTLP/gRPC exporters behind the `otlp-grpc` feature.
 - `listen` `one`/`any`/`all` with `foreach`, correlation `from`/`expect`
   evaluated against the workflow context, and cross-event correlation
   *grouping* (first-seen key values shared across filters).
@@ -210,8 +212,8 @@ Roadmap items implemented:
 
 Remaining / future work:
 
-- Live CTK network scenarios; OTLP/gRPC export (spans and metrics are exported
-  over OTLP/HTTP JSON to avoid forcing a gRPC/protobuf SDK on every build).
+- Live CTK network scenarios (the network-dependent CTK scenarios are skipped by
+  default and can be enabled with `--include-network`).
 
 
 ## License

@@ -39,6 +39,8 @@
   checkpoint and `Runtime::resume` continues a non-terminal execution.
 - OpenTelemetry OTLP/HTTP JSON spans and metrics (in addition to logs) in
   `ows-runtime-observability-otel`.
+- OTLP/gRPC exporters for logs, spans and metrics behind the `otlp-grpc`
+  feature (`opentelemetry-proto` + `tonic`).
 - Broker-based AsyncAPI transport (`transport.broker`) over the runtime's event
   publisher/consumer.
 - Native protobuf/HTTP-2 gRPC transport behind the `grpc-native` feature:

@@ -4,8 +4,13 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
-description = "OpenTelemetry (OTLP/HTTP JSON) integration for OWS runtime lifecycle events"
+description = "OpenTelemetry (OTLP/HTTP JSON and OTLP/gRPC) integration for OWS runtime lifecycle events"
 repository.workspace = true
+
+[features]
+default = []
+# Enables OTLP/gRPC export of logs, spans and metrics (requires a gRPC collector).
+otlp-grpc = ["dep:tonic", "dep:opentelemetry-proto"]
 
 [dependencies]
 serde_json = { workspace = true }
@@ -13,6 +18,9 @@ async-trait = { workspace = true }
 chrono = { workspace = true }
 reqwest = { workspace = true }
 ows-runtime-core = { path = "../ows-runtime-core" }
+tonic = { version = "0.14", optional = true }
+opentelemetry-proto = { version = "0.32", optional = true, features = ["gen-tonic", "logs", "trace", "metrics"] }
 
 [dev-dependencies]
 tokio = { workspace = true }
+tokio-stream = "0.1"

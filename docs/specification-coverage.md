@@ -50,7 +50,7 @@ non-network ones.
 | Catalogs | Catalogs | ✅ | ✅ | ✅ | — | `CatalogResolver` (static/file/HTTP), nested catalogs |
 | Runtime policy (deny-by-default) | Security | ✅ | ✅ | ✅ | — | |
 | Persistence (`ExecutionStore`) | Persistence | ✅ | ✅ | ✅ | — | in-memory + SQLite/Postgres/Redis; per-task checkpoints + `Runtime::resume` |
-| Observability (tracing, lifecycle events) | Observability | ✅ | ✅ | ✅ | — | OTLP/HTTP JSON logs, spans and metrics in `ows-runtime-observability-otel` |
+| Observability (tracing, lifecycle events) | Observability | ✅ | ✅ | ✅ | — | OTLP/HTTP JSON + OTLP/gRPC (`otlp-grpc`) logs, spans and metrics |
 
 ## Documented limitations
 
@@ -81,8 +81,8 @@ non-network ones.
   logged, not fatal. Integration tests cover in-memory and SQLite resume.
 - `ows-runtime-observability-otel` exports lifecycle events to an
   OpenTelemetry collector over OTLP/HTTP JSON as **logs, spans and metrics**,
-  verified end to end against a loopback OTLP/HTTP collector. OTLP/gRPC export
-  would require the OpenTelemetry OTLP/gRPC SDK or a protobuf transport and is
-  not bundled.
+  verified end to end against a loopback OTLP/HTTP collector, and over
+  **OTLP/gRPC** behind the `otlp-grpc` feature (verified end to end against a
+  `tonic` collector implementing the generated `LogsService`).
 - The `evaluate.language` is honored as `jq`; the `js` expression language is
   parsed but not executed (the bundled engine is a sandboxed jq subset).

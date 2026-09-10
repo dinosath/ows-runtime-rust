@@ -15,6 +15,12 @@ use async_trait::async_trait;
 use ows_runtime_core::{ErrorKind, EventMessage, EventPublisher, StandardErrorType, WorkflowError};
 use serde_json::{json, Value};
 
+#[cfg(feature = "otlp-grpc")]
+pub mod grpc;
+
+/// The default OTLP/gRPC endpoint for a local collector.
+pub const DEFAULT_OTLP_GRPC_ENDPOINT: &str = "http://localhost:4317";
+
 /// The default OTLP/HTTP logs endpoint for a local collector.
 pub const DEFAULT_OTLP_LOGS_ENDPOINT: &str = "http://localhost:4318/v1/logs";
 
@@ -327,6 +333,11 @@ impl RuntimeMetrics {
     /// Returns a snapshot of the counters.
     pub fn counters(&self) -> std::collections::BTreeMap<String, i64> {
         self.state.lock().unwrap().counters.clone()
+    }
+
+    /// Returns a snapshot of the duration observations (milliseconds).
+    pub fn durations(&self) -> std::collections::BTreeMap<String, Vec<f64>> {
+        self.state.lock().unwrap().durations.clone()
     }
 
     /// Encodes the metrics as an OTLP/HTTP JSON request.

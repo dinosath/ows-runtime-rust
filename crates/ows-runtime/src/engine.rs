@@ -75,6 +75,12 @@ pub(crate) struct ExecContext {
     pub cancel: Arc<Cancellation>,
     /// Loop variables currently in scope (e.g. `$each`, `$index`).
     pub loop_vars: Map<String, Value>,
+    /// Whether workflow extensions apply. Disabled while running extension
+    /// tasks themselves so extensions never recurse infinitely.
+    pub apply_extensions: bool,
+    /// Set when the current scope exits via an `exit` flow directive. Used by
+    /// extensions to short-circuit the extended task.
+    pub scope_exited: bool,
 }
 
 impl ExecContext {
@@ -138,17 +144,21 @@ pub(crate) async fn execute(
         "startedAt": started_at,
     });
 
+    let secrets = resolve_workflow_secrets(&inner, &workflow);
+
     let mut ctx = ExecContext {
         inner: inner.clone(),
         execution_id: execution_id.clone(),
         context: Arc::new(Mutex::new(Value::Null)),
-        secrets: HashMap::new(),
+        secrets,
         workflow_descriptor,
         runtime_descriptor: inner.runtime_info.to_value(),
         ended: Arc::new(AtomicBool::new(false)),
         timeout: workflow.timeout,
         cancel,
         loop_vars: Map::new(),
+        apply_extensions: true,
+        scope_exited: false,
     };
 
     let wf_ref = ows_runtime_observability::WorkflowRef {
@@ -437,6 +447,7 @@ pub(crate) fn exec_scope<'a>(
                     }
                 },
                 FlowDirective::Exit => {
+                    ctx.scope_exited = true;
                     return Ok(input);
                 }
                 FlowDirective::End => {
@@ -480,13 +491,27 @@ pub(crate) fn exec_task<'a>(
         validate_schema(inner, &task.input.schema, raw_input, &task.reference).await?;
 
         // 3. Transform task input.
-        let task_input = match &task.input.transform {
+        let mut task_input = match &task.input.transform {
             Some(src) => {
                 let vars = ctx.variables(raw_input, &Value::Null, Some(&task_descriptor));
                 eval_expr(inner, src, raw_input, &vars, Some(task))?
             }
             None => raw_input.clone(),
         };
+
+        // 3b. Apply matching extensions' `before` tasks. An extension task with
+        //     `then: exit` short-circuits the extended task body.
+        let extensions = applicable_extensions(inner, workflow, task, raw_input, ctx)?;
+        let mut skip_body = false;
+        for ext in &extensions {
+            let outcome =
+                run_extension_scope(inner, workflow, &ext.before, ctx, &task_input).await?;
+            task_input = outcome.value;
+            if outcome.exited {
+                skip_body = true;
+                break;
+            }
+        }
 
         // Build the expression context used by the task definition.
         let mut expr_ctx = ExpressionContext {
@@ -501,20 +526,30 @@ pub(crate) fn exec_task<'a>(
             extra_vars: ctx.loop_vars.clone(),
         };
 
-        // 4. Execute the task body.
-        let dispatched =
-            tasks::dispatch(inner, workflow, task, &task_input, &mut expr_ctx, ctx).await?;
-        let raw_output = dispatched.output;
-        let task_directive = dispatched.directive;
+        // 4. Execute the task body (or use the extension output when exited).
+        let (raw_output, task_directive) = if skip_body {
+            (task_input.clone(), None)
+        } else {
+            let dispatched =
+                tasks::dispatch(inner, workflow, task, &task_input, &mut expr_ctx, ctx).await?;
+            (dispatched.output, dispatched.directive)
+        };
 
         tracing::debug!(task.name = %task.name, "task.completed");
 
         // 5. Transform task output.
         let vars_out = expr_ctx.as_variable_map_updated(&task_input, &raw_output);
-        let transformed_output = match &task.output.transform {
+        let mut transformed_output = match &task.output.transform {
             Some(src) => eval_expr(inner, src, &raw_output, &vars_out, Some(task))?,
             None => raw_output.clone(),
         };
+
+        // 5b. Apply matching extensions' `after` tasks.
+        for ext in &extensions {
+            let outcome =
+                run_extension_scope(inner, workflow, &ext.after, ctx, &transformed_output).await?;
+            transformed_output = outcome.value;
+        }
 
         // 6. Validate task output.
         validate_schema(
@@ -540,6 +575,99 @@ pub(crate) fn exec_task<'a>(
             output: transformed_output,
             directive: task_directive,
         })
+    })
+}
+
+/// Resolves the workflow's declared secrets through the configured resolver.
+///
+/// Only declared secret names are resolved. A declared secret that the resolver
+/// cannot provide is omitted (and thus appears as `null` to expressions).
+pub(crate) fn resolve_workflow_secrets(
+    inner: &Arc<RuntimeInner>,
+    workflow: &CompiledWorkflow,
+) -> HashMap<String, String> {
+    let mut out = HashMap::new();
+    for name in &workflow.secrets {
+        if let Some(value) = inner.secrets.resolve(name) {
+            out.insert(name.clone(), value);
+        }
+    }
+    out
+}
+
+/// Selects the extensions that apply to a task, evaluating their `when` guards.
+fn applicable_extensions(
+    inner: &Arc<RuntimeInner>,
+    workflow: &Arc<CompiledWorkflow>,
+    task: &CompiledTask,
+    input: &Value,
+    ctx: &ExecContext,
+) -> Result<Vec<CompiledExtension>, WorkflowError> {
+    if !ctx.apply_extensions || workflow.extensions.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut out = Vec::new();
+    for ext in &workflow.extensions {
+        if !extension_targets(ext, task) {
+            continue;
+        }
+        if let Some(when) = &ext.when {
+            let vars = ctx.variables(input, &Value::Null, Some(&task.descriptor));
+            let cond = eval_expr(inner, when, input, &vars, Some(task))?;
+            if !is_truthy(&cond) {
+                continue;
+            }
+        }
+        out.push(ext.clone());
+    }
+    Ok(out)
+}
+
+/// Returns whether an extension targets the given task.
+fn extension_targets(ext: &CompiledExtension, task: &CompiledTask) -> bool {
+    if ext.extend == task.type_name() {
+        return true;
+    }
+    // `call` tasks may additionally be extended by their function name.
+    if let CompiledTaskKind::Call(call) = &task.kind {
+        return ext.extend == call.call;
+    }
+    false
+}
+
+/// The result of running an extension `before`/`after` scope.
+struct ExtensionOutcome {
+    /// The scope's resulting value.
+    value: Value,
+    /// Whether the scope exited via an `exit` flow directive.
+    exited: bool,
+}
+
+/// Runs an extension's `before`/`after` scope with extensions temporarily
+/// disabled so an extension never extends itself.
+async fn run_extension_scope(
+    inner: &Arc<RuntimeInner>,
+    workflow: &Arc<CompiledWorkflow>,
+    scope: &[CompiledTask],
+    ctx: &mut ExecContext,
+    input: &Value,
+) -> Result<ExtensionOutcome, WorkflowError> {
+    if scope.is_empty() {
+        return Ok(ExtensionOutcome {
+            value: input.clone(),
+            exited: false,
+        });
+    }
+    let previous = ctx.apply_extensions;
+    ctx.apply_extensions = false;
+    ctx.scope_exited = false;
+    let result = exec_scope(inner, workflow, scope, ctx, input).await;
+    let exited = ctx.scope_exited;
+    ctx.scope_exited = false;
+    ctx.apply_extensions = previous;
+    Ok(ExtensionOutcome {
+        value: result?,
+        exited,
     })
 }
 

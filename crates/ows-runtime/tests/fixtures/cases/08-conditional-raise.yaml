@@ -1,0 +1,8 @@
+name: conditional raise faults for an underage customer (official example)
+workflow_file: ../ows_examples/conditional-task.yaml
+input:
+  customer: { age: 15 }
+  bet: { amount: 10 }
+expect:
+  error: true
+  error_kind: fault

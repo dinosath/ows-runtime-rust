@@ -38,6 +38,14 @@ pub fn compile(def: &WorkflowDefinition) -> Result<CompiledWorkflow, WorkflowErr
         trigger: build_schedule_trigger(s),
     });
 
+    let extensions = compile_extensions(components.as_ref())?;
+
+    let secrets = components
+        .as_ref()
+        .and_then(|c| c.secrets.clone())
+        .unwrap_or_default();
+    enforce_declared_secrets(def, &secrets)?;
+
     Ok(CompiledWorkflow {
         id: crate::workflow_id(def),
         definition: def.clone(),
@@ -47,13 +55,131 @@ pub fn compile(def: &WorkflowDefinition) -> Result<CompiledWorkflow, WorkflowErr
         output: compile_output(def.output.as_ref()),
         timeout,
         evaluate: eval,
-        secrets: components
-            .as_ref()
-            .and_then(|c| c.secrets.clone())
-            .unwrap_or_default(),
+        secrets,
         components,
+        extensions,
         schedule,
     })
+}
+
+/// Rejects references to secrets that are not declared in `use.secrets`.
+fn enforce_declared_secrets(
+    def: &WorkflowDefinition,
+    declared: &[String],
+) -> Result<(), WorkflowError> {
+    let value = serde_json::to_value(def).unwrap_or(serde_json::Value::Null);
+    let mut referenced = std::collections::BTreeSet::new();
+    collect_secret_refs(&value, &mut referenced);
+    for name in referenced {
+        if !declared.iter().any(|d| d == &name) {
+            return Err(runtime_err(
+                "semantic",
+                format!("reference to undeclared secret `{name}`"),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Recursively scans a definition for `$secrets.<name>` references.
+fn collect_secret_refs(
+    value: &serde_json::Value,
+    out: &mut std::collections::BTreeSet<String>,
+) {
+    use regex::Regex;
+    use std::sync::OnceLock;
+    static DOT: OnceLock<Regex> = OnceLock::new();
+    static BRACKET: OnceLock<Regex> = OnceLock::new();
+
+    match value {
+        serde_json::Value::String(s) => {
+            // `$secrets.name`
+            let dot = DOT.get_or_init(|| {
+                Regex::new(r#"\$secrets\.([A-Za-z0-9_\-]+)"#).expect("valid secret regex")
+            });
+            for cap in dot.captures_iter(s) {
+                out.insert(cap[1].to_string());
+            }
+            // `$secrets["name"]` / `$secrets['name']`
+            let bracket = BRACKET.get_or_init(|| {
+                Regex::new(r#"\$secrets\[\s*['"]([^'"]+)['"]\s*\]"#)
+                    .expect("valid secret bracket regex")
+            });
+            for cap in bracket.captures_iter(s) {
+                out.insert(cap[1].to_string());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_secret_refs(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for item in map.values() {
+                collect_secret_refs(item, out);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// Compiles the workflow's reusable extensions (`use.extensions`).
+///
+/// Each extension is a name → definition mapping. The `before`/`after` task
+/// lists are compiled as normal scopes so they can use the full task pipeline.
+fn compile_extensions(
+    components: Option<&dsl_models::ComponentDefinitionCollection>,
+) -> Result<Vec<CompiledExtension>, WorkflowError> {
+    let Some(list) = components.and_then(|c| c.extensions.as_ref()) else {
+        return Ok(Vec::new());
+    };
+    let mut out = Vec::new();
+    for (index, entry) in list.iter().enumerate() {
+        for (name, ext) in entry {
+            let before = match &ext.before {
+                Some(tasks) => {
+                    let map = task_list_to_map(tasks);
+                    compile_scope(
+                        &map,
+                        &format!("/use/extensions/{index}/{name}/before"),
+                        components,
+                    )?
+                }
+                None => Vec::new(),
+            };
+            let after = match &ext.after {
+                Some(tasks) => {
+                    let map = task_list_to_map(tasks);
+                    compile_scope(
+                        &map,
+                        &format!("/use/extensions/{index}/{name}/after"),
+                        components,
+                    )?
+                }
+                None => Vec::new(),
+            };
+            out.push(CompiledExtension {
+                extend: ext.extend.clone(),
+                when: ext.when.clone(),
+                before,
+                after,
+            });
+        }
+    }
+    Ok(out)
+}
+
+/// Converts a `before`/`after` task list into the ordered `Map` used by scopes.
+fn task_list_to_map(
+    tasks: &[HashMap<String, TaskDefinition>],
+) -> dsl_models::Map<String, TaskDefinition> {
+    let mut map = dsl_models::Map::new();
+    for entry in tasks {
+        for (name, task) in entry {
+            map.add(name.clone(), task.clone());
+        }
+    }
+    map
 }
 
 /// Compiles an ordered scope of tasks.

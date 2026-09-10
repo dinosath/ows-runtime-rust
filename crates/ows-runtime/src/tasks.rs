@@ -1210,6 +1210,8 @@ mod tests {
             timeout: None,
             cancel: Arc::new(crate::runtime::Cancellation::new()),
             loop_vars: Default::default(),
+            apply_extensions: true,
+            scope_exited: false,
         };
         let retry = retry_policy(Some("true"), None, None, Backoff::Constant);
         assert!(retryable(&inner, &retry, &err, &ctx, &ec).unwrap());
@@ -1239,6 +1241,8 @@ mod tests {
             timeout: None,
             cancel: Arc::new(crate::runtime::Cancellation::new()),
             loop_vars: Default::default(),
+            apply_extensions: true,
+            scope_exited: false,
         };
         let catch = CatchDef {
             filter: Some([("status".to_string(), json!(500))].into_iter().collect()),
@@ -1275,6 +1279,8 @@ mod tests {
             timeout: None,
             cancel: Arc::new(crate::runtime::Cancellation::new()),
             loop_vars: Default::default(),
+            apply_extensions: true,
+            scope_exited: false,
         };
         let catch = CatchDef {
             filter: None,
@@ -1386,6 +1392,7 @@ do:
                     ..Default::default()
                 },
             ),
+            extensions: vec![],
             schedule: None,
         });
         let inner = inner();

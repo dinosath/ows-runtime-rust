@@ -78,8 +78,27 @@ pub struct CompiledWorkflow {
     pub secrets: Vec<String>,
     /// The workflow's reusable components.
     pub components: Option<dsl_models::ComponentDefinitionCollection>,
+    /// The workflow's extensions (`use.extensions`).
+    pub extensions: Vec<CompiledExtension>,
     /// The schedule, if any.
     pub schedule: Option<CompiledSchedule>,
+}
+
+/// A compiled workflow extension (`use.extensions`).
+///
+/// An extension contributes tasks that run `before` and/or `after` every task
+/// whose type matches `extend`. The optional `when` guard is evaluated against
+/// the extended task's input to decide whether the extension applies.
+#[derive(Debug, Clone)]
+pub struct CompiledExtension {
+    /// The OWS task type to extend (e.g. `set`, `call`, `http`).
+    pub extend: String,
+    /// The runtime expression guard, if any.
+    pub when: Option<String>,
+    /// Tasks to run before the extended task.
+    pub before: Vec<CompiledTask>,
+    /// Tasks to run after the extended task.
+    pub after: Vec<CompiledTask>,
 }
 
 /// A compiled schedule.

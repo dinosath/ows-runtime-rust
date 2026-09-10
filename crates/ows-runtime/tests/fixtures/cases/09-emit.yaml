@@ -1,0 +1,10 @@
+name: emit publishes a CloudEvent (official example)
+workflow_file: ../ows_examples/emit.yaml
+expect:
+  contains:
+    source: https://petstore.com
+    type: com.petstore.order.placed.v1
+    data:
+      client:
+        firstName: Cruella
+        lastName: de Vil

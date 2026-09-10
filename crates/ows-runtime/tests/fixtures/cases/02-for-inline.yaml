@@ -1,0 +1,9 @@
+name: for over an inline array (official example)
+workflow_file: ../ows_examples/for-inline-array.yaml
+input: {}
+expect:
+  output:
+    processed:
+      - { name: red, hex: '#FF0000' }
+      - { name: green, hex: '#00FF00' }
+      - { name: blue, hex: '#0000FF' }

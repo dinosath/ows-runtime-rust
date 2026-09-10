@@ -14,6 +14,15 @@ fn ctk_dir() -> Option<PathBuf> {
     if let Ok(repo) = std::env::var("OWS_SPEC_REPO") {
         return Some(PathBuf::from(repo).join("ctk").join("features"));
     }
+    // The official CTK features are vendored so this data-driven suite runs in
+    // offline CI. See `tests/ctk/README.md`.
+    let vendored = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("ctk")
+        .join("features");
+    if vendored.exists() {
+        return Some(vendored);
+    }
     let local = PathBuf::from("specification/ctk/features");
     if local.exists() {
         return Some(local);

@@ -1,0 +1,26 @@
+name: try catches a raised error and runs the handler
+workflow:
+  document:
+    dsl: '1.0.3'
+    namespace: cases
+    name: try-catch
+    version: '0.1.0'
+  do:
+    - attempt:
+        try:
+          - fail:
+              raise:
+                error:
+                  type: https://example.com/errors/boom
+                  status: 500
+                  title: Boom
+        catch:
+          errors:
+            with:
+              title: Boom
+          do:
+            - recover:
+                set: { recovered: true }
+expect:
+  output:
+    recovered: true

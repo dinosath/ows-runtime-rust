@@ -1,0 +1,27 @@
+name: switch dispatches to a named task
+workflow:
+  document:
+    dsl: '1.0.3'
+    namespace: cases
+    name: switch-dispatch
+    version: '0.1.0'
+  do:
+    - classify:
+        switch:
+          - small:
+              when: '.value < 10'
+              then: smallTask
+          - big:
+              when: '.value >= 10'
+              then: bigTask
+    - smallTask:
+        set: { size: small }
+        then: end
+    - bigTask:
+        set: { size: big }
+        then: end
+input:
+  value: 5
+expect:
+  output:
+    size: small

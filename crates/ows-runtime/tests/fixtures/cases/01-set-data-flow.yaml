@@ -1,0 +1,16 @@
+name: set with interpolated data flow
+workflow:
+  document:
+    dsl: '1.0.3'
+    namespace: cases
+    name: set-flow
+    version: '0.1.0'
+  do:
+    - greet:
+        set:
+          greeting: '${ "Hello, " + .name }'
+input:
+  name: World
+expect:
+  output:
+    greeting: Hello, World

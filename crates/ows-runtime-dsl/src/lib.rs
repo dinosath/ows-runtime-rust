@@ -74,6 +74,18 @@ fn normalize_scope(value: &mut serde_json::Value) {
     let Value::Object(map) = value else {
         return;
     };
+    // `for.in` accepts an inline collection (array/object) in addition to a
+    // runtime expression. The SDK model types it as a string, so encode inline
+    // collections as JSON expressions (which the jq engine evaluates to the
+    // same value).
+    if let Some(Value::Object(loop_def)) = map.get_mut("for") {
+        if let Some(in_) = loop_def.get_mut("in") {
+            if !in_.is_string() {
+                let encoded = serde_json::to_string(in_).unwrap_or_default();
+                *in_ = Value::String(encoded);
+            }
+        }
+    }
     // Normalize `do` lists (and nested scope lists).
     if let Some(Value::Array(tasks)) = map.get_mut("do") {
         for task in tasks.iter_mut() {

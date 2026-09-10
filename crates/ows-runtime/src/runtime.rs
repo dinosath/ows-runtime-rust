@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use ows_runtime_core::{
     Clock, EventConsumer, EventPublisher, ExecutionStore, InMemoryExecutionStore, ProcessRunner,
-    RandomGenerator, RuntimeInfo, RuntimePolicy, Scheduler, ServiceInvoker, SystemClock,
-    UuidGenerator, WorkflowError,
+    RandomGenerator, RuntimeInfo, RuntimePolicy, Scheduler, SecretResolver, ServiceInvoker,
+    SystemClock, UuidGenerator, WorkflowError,
 };
 use serverless_workflow_core::models::workflow::WorkflowDefinition;
 use tokio::sync::{oneshot, Notify};
@@ -36,6 +36,10 @@ pub struct RuntimeInner {
     pub consumer: Arc<dyn EventConsumer>,
     pub store: Arc<dyn ExecutionStore>,
     pub scheduler: Arc<dyn Scheduler>,
+    /// Resolves declared workflow secrets for `$secrets`.
+    pub secrets: Arc<dyn SecretResolver>,
+    /// Resolves `use.catalogs` endpoints, if configured.
+    pub catalog: Option<Arc<dyn crate::catalog::CatalogResolver>>,
     pub workflows: Arc<std::sync::Mutex<HashMap<String, Arc<CompiledWorkflow>>>>,
     /// A log of task names in execution order (used for ordering assertions).
     pub task_order: Arc<std::sync::Mutex<Vec<String>>>,
@@ -192,6 +196,67 @@ impl Runtime {
         Ok(self.inner.register(compiled))
     }
 
+    /// Resolves the workflow's `use.catalogs` imports and merges the imported
+    /// components into `use`.
+    ///
+    /// If the definition declares no catalogs, or no catalog resolver is
+    /// configured, the definition is returned unchanged (references to missing
+    /// components then fail at compile time).
+    pub async fn resolve_definition(
+        &self,
+        def: &WorkflowDefinition,
+    ) -> Result<WorkflowDefinition, WorkflowError> {
+        let Some(use_) = def.use_.clone() else {
+            return Ok(def.clone());
+        };
+        if use_.catalogs.as_ref().map(|c| c.is_empty()).unwrap_or(true) {
+            return Ok(def.clone());
+        }
+        let Some(resolver) = self.inner.catalog.clone() else {
+            tracing::warn!(
+                workflow.name = %def.document.name,
+                "workflow declares catalogs but no catalog resolver is configured"
+            );
+            return Ok(def.clone());
+        };
+
+        let mut merged = use_.clone();
+        let mut queue: Vec<(String, crate::dsl_models::OneOfEndpointDefinitionOrUri)> = merged
+            .catalogs
+            .as_ref()
+            .map(|c| c.iter().map(|(k, v)| (k.clone(), v.endpoint.clone())).collect())
+            .unwrap_or_default();
+        let mut visited: std::collections::HashSet<String> = std::collections::HashSet::new();
+
+        while let Some((_name, endpoint)) = queue.pop() {
+            let uri = catalog_endpoint_uri(&endpoint);
+            if !visited.insert(uri.clone()) {
+                continue;
+            }
+            let collection = resolver.resolve(&uri).await?;
+            // Queue any catalogs the imported collection declares.
+            if let Some(nested) = &collection.catalogs {
+                for (k, v) in nested {
+                    queue.push((k.clone(), v.endpoint.clone()));
+                }
+            }
+            merge_components(&mut merged, collection);
+        }
+
+        let mut resolved = def.clone();
+        resolved.use_ = Some(merged);
+        Ok(resolved)
+    }
+
+    /// Resolves `use.catalogs`, then compiles and registers the workflow.
+    pub async fn register_definition_resolved(
+        &self,
+        def: &WorkflowDefinition,
+    ) -> Result<Arc<CompiledWorkflow>, WorkflowError> {
+        let resolved = self.resolve_definition(def).await?;
+        self.register_definition(&resolved)
+    }
+
     /// Executes a compiled workflow with the given input.
     pub async fn execute(
         &self,
@@ -236,6 +301,49 @@ impl Runtime {
     }
 }
 
+/// Extracts the URI from a catalog endpoint definition.
+fn catalog_endpoint_uri(
+    endpoint: &crate::dsl_models::OneOfEndpointDefinitionOrUri,
+) -> String {
+    match endpoint {
+        crate::dsl_models::OneOfEndpointDefinitionOrUri::Uri(uri) => uri.clone(),
+        crate::dsl_models::OneOfEndpointDefinitionOrUri::Endpoint(e) => e.uri.clone(),
+    }
+}
+
+/// Merges components imported from a catalog into `dst`.
+fn merge_components(
+    dst: &mut crate::dsl_models::ComponentDefinitionCollection,
+    src: crate::dsl_models::ComponentDefinitionCollection,
+) {
+    if let Some(m) = src.authentications {
+        dst.authentications
+            .get_or_insert_with(Default::default)
+            .extend(m);
+    }
+    if let Some(m) = src.errors {
+        dst.errors.get_or_insert_with(Default::default).extend(m);
+    }
+    if let Some(m) = src.functions {
+        dst.functions.get_or_insert_with(Default::default).extend(m);
+    }
+    if let Some(m) = src.retries {
+        dst.retries.get_or_insert_with(Default::default).extend(m);
+    }
+    if let Some(m) = src.timeouts {
+        dst.timeouts.get_or_insert_with(Default::default).extend(m);
+    }
+    if let Some(m) = src.catalogs {
+        dst.catalogs.get_or_insert_with(Default::default).extend(m);
+    }
+    if let Some(v) = src.secrets {
+        dst.secrets.get_or_insert_with(Vec::new).extend(v);
+    }
+    if let Some(v) = src.extensions {
+        dst.extensions.get_or_insert_with(Vec::new).extend(v);
+    }
+}
+
 async fn run_with_cancel(
     inner: Arc<RuntimeInner>,
     workflow: Arc<CompiledWorkflow>,
@@ -277,6 +385,8 @@ pub struct RuntimeBuilder {
     consumer: Option<Arc<dyn EventConsumer>>,
     store: Option<Arc<dyn ExecutionStore>>,
     scheduler: Option<Arc<dyn Scheduler>>,
+    secrets: Arc<dyn SecretResolver>,
+    catalog: Option<Arc<dyn crate::catalog::CatalogResolver>>,
     enable_schema_validation: bool,
 }
 
@@ -297,6 +407,8 @@ impl RuntimeBuilder {
             consumer: None,
             store: None,
             scheduler: None,
+            secrets: Arc::new(ows_runtime_core::EmptySecretResolver),
+            catalog: None,
             enable_schema_validation: true,
         }
     }
@@ -379,6 +491,30 @@ impl RuntimeBuilder {
         self
     }
 
+    /// Sets the secret resolver used to populate `$secrets`.
+    pub fn with_secret_resolver(mut self, resolver: Arc<dyn SecretResolver>) -> Self {
+        self.secrets = resolver;
+        self
+    }
+
+    /// Sets secrets from a name → value mapping (convenience for embedding).
+    pub fn with_secrets(
+        mut self,
+        secrets: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> Self {
+        self.secrets = Arc::new(ows_runtime_core::MapSecretResolver::from_pairs(secrets));
+        self
+    }
+
+    /// Sets the catalog resolver used to resolve `use.catalogs` imports.
+    pub fn with_catalog_resolver(
+        mut self,
+        resolver: Arc<dyn crate::catalog::CatalogResolver>,
+    ) -> Self {
+        self.catalog = Some(resolver);
+        self
+    }
+
     /// Builds the runtime.
     pub fn build(self) -> Result<Runtime, WorkflowError> {
         #[cfg(feature = "validation")]
@@ -418,6 +554,8 @@ impl RuntimeBuilder {
             scheduler: self
                 .scheduler
                 .unwrap_or_else(|| Arc::new(ows_runtime_scheduler::NoopScheduler)),
+            secrets: self.secrets,
+            catalog: self.catalog,
             workflows: Arc::new(std::sync::Mutex::new(HashMap::new())),
             task_order: Arc::new(std::sync::Mutex::new(Vec::new())),
             #[cfg(feature = "validation")]

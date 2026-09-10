@@ -1,0 +1,18 @@
+name: fork runs branches in declaration order
+workflow:
+  document:
+    dsl: '1.0.3'
+    namespace: cases
+    name: fork-branches
+    version: '0.1.0'
+  do:
+    - fan:
+        fork:
+          compete: false
+          branches:
+            - a: { set: { n: 1 } }
+            - b: { set: { n: 2 } }
+expect:
+  output:
+    - { n: 1 }
+    - { n: 2 }

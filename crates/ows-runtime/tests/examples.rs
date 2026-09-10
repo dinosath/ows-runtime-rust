@@ -8,6 +8,15 @@ use std::path::PathBuf;
 use ows_runtime::Runtime;
 
 fn examples_dir() -> Option<PathBuf> {
+    // Prefer the official examples vendored into the repository so this
+    // data-driven suite runs in offline CI.
+    let vendored = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("tests")
+        .join("fixtures")
+        .join("ows_examples");
+    if vendored.exists() {
+        return Some(vendored);
+    }
     let repo = std::env::var("OWS_SPEC_REPO").ok()?;
     let dir = PathBuf::from(repo).join("examples");
     if dir.exists() {

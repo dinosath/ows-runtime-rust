@@ -10,6 +10,7 @@
 //! brokers and cloud providers; those are adapters behind the core traits.
 #![allow(clippy::result_large_err)]
 
+pub mod catalog;
 pub mod compile;
 pub mod engine;
 pub mod error;

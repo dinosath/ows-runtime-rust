@@ -13,6 +13,7 @@ pub mod expression;
 pub mod phase;
 pub mod policy;
 pub mod runtime;
+pub mod secret;
 pub mod service;
 pub mod store;
 pub mod uuid;
@@ -27,6 +28,7 @@ pub use policy::{RetryBounds, RuntimePolicy};
 pub use runtime::{
     EventMessageLike, RuntimeInfo, ScheduleTrigger, ScheduledExecution, ScheduledHandle, Scheduler,
 };
+pub use secret::{EmptySecretResolver, EnvSecretResolver, MapSecretResolver, SecretResolver};
 pub use service::{
     EventConsumer, EventMessage, EventPublisher, EventSubscription, NoopEventConsumer,
     NullEventPublisher, ProcessResult, ProcessRunner, ServiceInvoker, ServiceRequest,

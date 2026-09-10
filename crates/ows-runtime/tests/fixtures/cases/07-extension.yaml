@@ -1,0 +1,21 @@
+name: extension wraps a set task before and after
+workflow:
+  document:
+    dsl: '1.0.3'
+    namespace: cases
+    name: extension
+    version: '0.1.0'
+  use:
+    extensions:
+      - audit:
+          extend: set
+          before:
+            - pre: { set: { guarded: false } }
+          after:
+            - post: { set: { done: '${ $input }' } }
+  do:
+    - t: { set: { x: 1 } }
+expect:
+  output:
+    done:
+      x: 1

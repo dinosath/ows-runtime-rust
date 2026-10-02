@@ -4,9 +4,11 @@
 //! decodable) and before runtime compilation. It checks OWS semantic rules that
 //! cannot be expressed in the schema, producing structured issues.
 
+use regex::Regex;
 use serverless_workflow_core::models::map::Map;
 use serverless_workflow_core::models::task::TaskDefinition;
 use serverless_workflow_core::models::workflow::WorkflowDefinition;
+use std::collections::HashSet;
 
 use crate::models::task::ForTaskDefinition;
 
@@ -63,6 +65,24 @@ pub fn validate(def: &WorkflowDefinition) -> ValidationReport {
                 .at("/document/name"),
         );
     }
+    if !is_identifier(&def.document.name) {
+        report.issues.push(
+            ValidationIssue::new(
+                "document.name.invalid",
+                "workflow name must be a valid OWS identifier",
+            )
+            .at("/document/name"),
+        );
+    }
+    if !is_identifier(&def.document.namespace) {
+        report.issues.push(
+            ValidationIssue::new(
+                "document.namespace.invalid",
+                "workflow namespace must be a valid OWS identifier",
+            )
+            .at("/document/namespace"),
+        );
+    }
     if def.document.version.is_empty() {
         report.issues.push(
             ValidationIssue::new(
@@ -111,6 +131,27 @@ fn validate_task_scope(
         .iter()
         .filter_map(|e| e.keys().next())
         .collect();
+    let mut seen = HashSet::new();
+    for (index, name) in names.iter().enumerate() {
+        if !is_identifier(name) {
+            report.issues.push(
+                ValidationIssue::new(
+                    "task.name.invalid",
+                    format!("task name `{name}` must be a valid OWS identifier"),
+                )
+                .at(format!("{pointer}/{index}/{name}")),
+            );
+        }
+        if !seen.insert((*name).clone()) {
+            report.issues.push(
+                ValidationIssue::new(
+                    "task.name.duplicate",
+                    format!("task name `{name}` is duplicated in this scope"),
+                )
+                .at(format!("{pointer}/{index}/{name}")),
+            );
+        }
+    }
     // Flow targets are all names in this scope.
     let valid_targets: std::collections::HashSet<&String> = names.iter().copied().collect();
 
@@ -139,7 +180,6 @@ fn validate_task_scope(
                 }
             }
         }
-
         // Recurse into composite tasks.
         match task {
             TaskDefinition::Do(d) => {
@@ -165,6 +205,108 @@ fn validate_task_scope(
             _ => {}
         }
     }
+
+    validate_reachability(report, tasks, pointer);
+}
+
+/// Checks the directed task graph in a scope. Sequential fall-through is an
+/// edge unless a task has an explicit directive; switch cases contribute their
+/// own possible edges. Cycles are allowed by OWS (a named `then` can be used
+/// for repetition), so only genuinely unreachable tasks are diagnosed here.
+fn validate_reachability(
+    report: &mut ValidationReport,
+    tasks: &Map<String, TaskDefinition>,
+    pointer: &str,
+) {
+    let names: Vec<String> = tasks
+        .entries
+        .iter()
+        .filter_map(|e| e.keys().next().cloned())
+        .collect();
+    if names.is_empty() {
+        return;
+    }
+    let mut reachable = HashSet::new();
+    let mut pending = vec![0usize];
+    while let Some(index) = pending.pop() {
+        if index >= names.len() || !reachable.insert(index) {
+            continue;
+        }
+        let Some(task) = tasks.entries[index].values().next() else {
+            continue;
+        };
+        let mut explicit = false;
+        if let Some(then) = common_then(task) {
+            explicit = true;
+            add_edge(&mut pending, &names, index, then);
+        }
+        // A guarded task has a fall-through path when its condition is false,
+        // regardless of the directive used when it does execute.
+        if common_if(task).is_some() {
+            pending.push(index + 1);
+        }
+        if let TaskDefinition::Switch(s) = task {
+            let mut has_fallthrough = false;
+            for entry in &s.switch.entries {
+                if let Some(case) = entry.values().next() {
+                    if let Some(then) = &case.then {
+                        explicit = true;
+                        add_edge(&mut pending, &names, index, then);
+                    } else {
+                        has_fallthrough = true;
+                    }
+                }
+            }
+            // If no case matches, OWS continues with the task's common
+            // directive or the next task. Keep that path in the graph.
+            if !has_fallthrough && common_then(task).is_none() {
+                pending.push(index + 1);
+            }
+        }
+        if !explicit {
+            pending.push(index + 1);
+        }
+    }
+    // The pinned upstream SDK does not retain the legacy `catch.then` field.
+    // A try task can therefore have a parent-scope error edge that is not
+    // representable in the typed model. Avoid a false unreachable diagnostic
+    // until that schema representation is available.
+    let has_recovery_scope = tasks
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.values().next(), Some(TaskDefinition::Try(_))));
+    for (index, name) in names.iter().enumerate() {
+        if !reachable.contains(&index) && !has_recovery_scope {
+            report.issues.push(
+                ValidationIssue::new(
+                    "flow.unreachable",
+                    format!("task `{name}` cannot be reached from the scope entry"),
+                )
+                .at(format!("{pointer}/{index}/{name}")),
+            );
+        }
+    }
+}
+
+fn add_edge(pending: &mut Vec<usize>, names: &[String], current: usize, then: &str) {
+    match then {
+        "continue" => pending.push(current + 1),
+        "exit" | "end" => {}
+        target => {
+            if let Some(index) = names.iter().position(|name| name == target) {
+                pending.push(index);
+            }
+        }
+    }
+}
+
+fn is_identifier(value: &str) -> bool {
+    use std::sync::OnceLock;
+    static IDENTIFIER: OnceLock<Regex> = OnceLock::new();
+    !value.is_empty()
+        && IDENTIFIER
+            .get_or_init(|| Regex::new(r"^[A-Za-z_][A-Za-z0-9_-]*$").expect("identifier regex"))
+            .is_match(value)
 }
 
 fn validate_for_task(report: &mut ValidationReport, f: &ForTaskDefinition, pointer: &str) {
@@ -233,6 +375,23 @@ fn common_then(task: &TaskDefinition) -> Option<&String> {
         TaskDefinition::Switch(t) => t.common.then.as_ref(),
         TaskDefinition::Try(t) => t.common.then.as_ref(),
         TaskDefinition::Wait(t) => t.common.then.as_ref(),
+    }
+}
+
+fn common_if(task: &TaskDefinition) -> Option<&String> {
+    match task {
+        TaskDefinition::Call(t) => t.common.if_.as_ref(),
+        TaskDefinition::Do(t) => t.common.if_.as_ref(),
+        TaskDefinition::Emit(t) => t.common.if_.as_ref(),
+        TaskDefinition::For(t) => t.common.if_.as_ref(),
+        TaskDefinition::Fork(t) => t.common.if_.as_ref(),
+        TaskDefinition::Listen(t) => t.common.if_.as_ref(),
+        TaskDefinition::Raise(t) => t.common.if_.as_ref(),
+        TaskDefinition::Run(t) => t.common.if_.as_ref(),
+        TaskDefinition::Set(t) => t.common.if_.as_ref(),
+        TaskDefinition::Switch(t) => t.common.if_.as_ref(),
+        TaskDefinition::Try(t) => t.common.if_.as_ref(),
+        TaskDefinition::Wait(t) => t.common.if_.as_ref(),
     }
 }
 
@@ -361,5 +520,37 @@ do:
 "#
         )
         .is_err());
+    }
+
+    #[test]
+    fn duplicate_and_unreachable_tasks_fail() {
+        let wf = parse(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - first: { set: { x: 1 }, then: end }
+  - first: { set: { x: 2 } }
+"#,
+        );
+        let report = validate(&wf);
+        assert!(report
+            .issues
+            .iter()
+            .any(|i| i.code == "task.name.duplicate"));
+        assert!(report.issues.iter().any(|i| i.code == "flow.unreachable"));
+    }
+
+    #[test]
+    fn guarded_terminal_task_keeps_fallthrough_reachable() {
+        let wf = parse(
+            r#"
+document: { dsl: '1.0.3', namespace: t, name: w, version: '0.1.0' }
+do:
+  - stop: { if: .stop, set: { x: 1 }, then: end }
+  - next: { set: { y: 2 } }
+"#,
+        );
+        let report = validate(&wf);
+        assert!(!report.issues.iter().any(|i| i.code == "flow.unreachable"));
     }
 }

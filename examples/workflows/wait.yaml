@@ -1,0 +1,9 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-wait
+  version: '0.1.0'
+do:
+  - pause:
+      wait:
+        milliseconds: 1

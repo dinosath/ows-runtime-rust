@@ -655,6 +655,26 @@ fn call_function(
             flatten_into(input, &mut out);
             Ok(vec![Value::Array(out)])
         }
+        "reverse" => match input {
+            Value::Array(items) => {
+                let mut reversed = items.clone();
+                reversed.reverse();
+                Ok(vec![Value::Array(reversed)])
+            }
+            other => Err(ExpressionError::type_error(format!(
+                "reverse expects an array, got `{other}`"
+            ))),
+        },
+        "fromjson" => {
+            let source = input
+                .as_str()
+                .ok_or_else(|| ExpressionError::type_error("fromjson expects a string input"))?;
+            serde_json::from_str(source)
+                .map_err(|error| {
+                    ExpressionError::eval(format!("fromjson could not parse JSON: {error}"))
+                })
+                .map(|value| vec![value])
+        }
         "add" => match input {
             Value::Array(items) => {
                 let mut acc = Value::Null;

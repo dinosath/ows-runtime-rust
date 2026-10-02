@@ -12,6 +12,7 @@ members = [
     "crates/ows-runtime",
     "crates/ows-runtime-testing",
     "crates/ows-runtime-cli",
+    "examples",
 ]
 default-members = [
     "crates/ows-runtime",

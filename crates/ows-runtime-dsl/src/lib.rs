@@ -13,6 +13,77 @@ use serde_json::Value;
 use serverless_workflow_core::models::workflow::WorkflowDefinition;
 use thiserror::Error;
 
+/// A parsed, specification-facing workflow definition.
+///
+/// `Workflow` deliberately contains only the OWS definition. Compilation,
+/// execution, persistence, scheduling, and transport adapters remain runtime
+/// concerns. This makes the small library API useful without requiring users
+/// to know about the executable IR:
+///
+/// ```ignore
+/// let workflow = Workflow::from_yaml(source)?;
+/// let output = runtime.run(&workflow, input).await?;
+/// # Ok::<(), Box<dyn std::error::Error>>(())
+/// ```
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(transparent)]
+pub struct Workflow {
+    definition: WorkflowDefinition,
+}
+
+impl Workflow {
+    /// Parses and normalizes a YAML workflow definition.
+    pub fn from_yaml(yaml: &str) -> Result<Self, DefinitionError> {
+        Ok(Self {
+            definition: from_yaml(yaml)?,
+        })
+    }
+
+    /// Parses and normalizes a JSON workflow definition.
+    pub fn from_json(json: &str) -> Result<Self, DefinitionError> {
+        Ok(Self {
+            definition: from_json(json)?,
+        })
+    }
+
+    /// Returns the underlying official SDK model.
+    pub fn definition(&self) -> &WorkflowDefinition {
+        &self.definition
+    }
+
+    /// Consumes this wrapper and returns the underlying SDK model.
+    pub fn into_definition(self) -> WorkflowDefinition {
+        self.definition
+    }
+
+    /// Validates the workflow before compilation or execution.
+    pub fn validate(&self) -> ValidationReport {
+        validate(&self.definition)
+    }
+
+    /// Serializes the workflow as YAML.
+    pub fn to_yaml(&self) -> Result<String, DefinitionError> {
+        to_yaml(&self.definition)
+    }
+
+    /// Serializes the workflow as JSON.
+    pub fn to_json(&self) -> Result<String, DefinitionError> {
+        to_json(&self.definition)
+    }
+}
+
+impl AsRef<WorkflowDefinition> for Workflow {
+    fn as_ref(&self) -> &WorkflowDefinition {
+        &self.definition
+    }
+}
+
+impl From<WorkflowDefinition> for Workflow {
+    fn from(definition: WorkflowDefinition) -> Self {
+        Self { definition }
+    }
+}
+
 /// Errors that can occur while parsing or validating a workflow definition.
 #[derive(Debug, Error)]
 pub enum DefinitionError {
@@ -254,5 +325,21 @@ do:
     fn from_bytes_parses() {
         let def = from_bytes(WF.as_bytes()).unwrap();
         assert_eq!(def.document.name, "wf");
+    }
+
+    #[test]
+    fn workflow_wrapper_round_trips_and_validates() {
+        let workflow = Workflow::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: demo, name: greet, version: '1.0.0' }
+do:
+  - greet: { set: { message: 'hello' } }
+"#,
+        )
+        .unwrap();
+        assert!(workflow.validate().is_valid());
+        let json = workflow.to_json().unwrap();
+        let from_json = Workflow::from_json(&json).unwrap();
+        assert_eq!(workflow, from_json);
     }
 }

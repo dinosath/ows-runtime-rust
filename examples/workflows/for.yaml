@@ -1,0 +1,16 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-for
+  version: '0.1.0'
+do:
+  - iterate:
+      for:
+        each: item
+        at: index
+        in: '["red", "green", "blue"]'
+      do:
+        - record:
+            set:
+              item: '${ $item }'
+              index: '${ $index }'

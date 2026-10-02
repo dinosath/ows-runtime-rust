@@ -16,6 +16,24 @@ use crate::ir::*;
 
 /// Compiles a validated workflow definition into executable IR.
 pub fn compile(def: &WorkflowDefinition) -> Result<CompiledWorkflow, WorkflowError> {
+    let report = ows_runtime_dsl::validate(def);
+    if !report.is_valid() {
+        let detail = report
+            .issues
+            .iter()
+            .map(|issue| match &issue.instance {
+                Some(instance) => format!("{} at {}: {}", issue.code, instance, issue.message),
+                None => format!("{}: {}", issue.code, issue.message),
+            })
+            .collect::<Vec<_>>()
+            .join("; ");
+        let mut error = crate::error::validation_error(detail);
+        error.problem.instance = report
+            .issues
+            .first()
+            .and_then(|issue| issue.instance.clone());
+        return Err(error);
+    }
     let components = def.use_.clone();
     let task_index = HashMap::new();
 

@@ -43,10 +43,9 @@ do:
 }
 
 #[tokio::test]
-async fn invalid_expression_faults() {
+async fn invalid_expression_is_rejected_before_execution() {
     let runtime = Runtime::builder().build().unwrap();
-    let err = run(
-        &runtime,
+    let def = ows_runtime_dsl::from_yaml(
         r#"
 document:
   dsl: '1.0.3'
@@ -58,10 +57,9 @@ do:
       set:
         x: '${ .this is [ not valid }'
 "#,
-        Value::Null,
     )
-    .await
-    .unwrap_err();
+    .expect("parse");
+    let err = runtime.register_definition(&def).unwrap_err();
     assert_eq!(err.kind, ErrorKind::Expression);
 }
 
@@ -154,10 +152,9 @@ do:
 }
 
 #[tokio::test]
-async fn flow_directive_to_unknown_task_faults() {
+async fn flow_directive_to_unknown_task_is_rejected_before_execution() {
     let runtime = Runtime::builder().build().unwrap();
-    let err = run(
-        &runtime,
+    let def = ows_runtime_dsl::from_yaml(
         r#"
 document:
   dsl: '1.0.3'
@@ -169,9 +166,8 @@ do:
       set: { x: 1 }
       then: missing
 "#,
-        Value::Null,
     )
-    .await
-    .unwrap_err();
-    assert_eq!(err.kind, ErrorKind::Semantic);
+    .expect("parse");
+    let err = runtime.register_definition(&def).unwrap_err();
+    assert_eq!(err.kind, ErrorKind::Schema);
 }

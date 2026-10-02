@@ -102,18 +102,19 @@ cargo test --workspace
 ## Basic usage
 
 ```rust,ignore
+use ows_runtime::{Runtime, Workflow};
+
+let runtime = Runtime::new();
+let workflow = Workflow::from_yaml(yaml)?;
+let output = runtime.run(&workflow, input).await?;
+```
+
+For custom invokers, policies, clocks, or adapters, use the builder API:
+
+```rust,ignore
 use ows_runtime::Runtime;
 
-let runtime = Runtime::builder()
-    .register_task(...)     // custom functions, services
-    .build()?;
-
-let definition = ows_runtime_dsl::from_yaml(yaml)?;
-let workflow = runtime.register_definition(&definition)?;
-
-let output = runtime
-    .run(workflow, input)
-    .await?;
+let runtime = Runtime::builder().register_function("name", invoker).build()?;
 ```
 
 ## Example workflow
@@ -223,11 +224,6 @@ Roadmap items implemented:
 - Data-driven testing: the official OWS CTK features and examples are vendored
   and run in offline CI, alongside a case-file suite for extension, catalog,
   secret, scheduling, listen, flow and data-flow behavior.
-
-Remaining / future work:
-
-- Live CTK network scenarios (the network-dependent CTK scenarios are skipped by
-  default and can be enabled with `--include-network`).
 
 
 ## License

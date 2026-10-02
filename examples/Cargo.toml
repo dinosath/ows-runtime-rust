@@ -1,0 +1,66 @@
+[package]
+name = "ows-runtime-examples"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish = false
+
+[dependencies]
+ows-runtime = { path = "../crates/ows-runtime" }
+ows-runtime-core = { path = "../crates/ows-runtime-core" }
+ows-runtime-events = { path = "../crates/ows-runtime-events" }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+
+[[bin]]
+name = "run-workflow"
+path = "src/bin/run_workflow.rs"
+
+[[bin]]
+name = "workflow-set"
+path = "src/bin/workflow_set.rs"
+
+[[bin]]
+name = "workflow-do"
+path = "src/bin/workflow_do.rs"
+
+[[bin]]
+name = "workflow-for"
+path = "src/bin/workflow_for.rs"
+
+[[bin]]
+name = "workflow-fork"
+path = "src/bin/workflow_fork.rs"
+
+[[bin]]
+name = "workflow-switch"
+path = "src/bin/workflow_switch.rs"
+
+[[bin]]
+name = "workflow-try"
+path = "src/bin/workflow_try.rs"
+
+[[bin]]
+name = "workflow-emit"
+path = "src/bin/workflow_emit.rs"
+
+[[bin]]
+name = "workflow-listen"
+path = "src/bin/workflow_listen.rs"
+
+[[bin]]
+name = "workflow-raise"
+path = "src/bin/workflow_raise.rs"
+
+[[bin]]
+name = "workflow-call"
+path = "src/bin/workflow_call.rs"
+
+[[bin]]
+name = "workflow-run"
+path = "src/bin/workflow_run.rs"
+
+[[bin]]
+name = "workflow-wait"
+path = "src/bin/workflow_wait.rs"

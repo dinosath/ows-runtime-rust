@@ -1732,6 +1732,7 @@ dependencies = [
  "serde_json",
  "serde_yaml",
  "tokio",
+ "tracing-subscriber",
 ]
 
 [[package]]
@@ -1753,6 +1754,7 @@ name = "ows-runtime-dsl"
 version = "0.1.0"
 dependencies = [
  "ows-runtime-core",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",
@@ -1770,6 +1772,17 @@ dependencies = [
  "serde",
  "serde_json",
  "thiserror 1.0.69",
+ "tokio",
+]
+
+[[package]]
+name = "ows-runtime-examples"
+version = "0.1.0"
+dependencies = [
+ "ows-runtime",
+ "ows-runtime-core",
+ "ows-runtime-events",
+ "serde_json",
  "tokio",
 ]
 

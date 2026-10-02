@@ -5,9 +5,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use ows_runtime_core::{
-    Clock, ErrorKind, EventConsumer, EventPublisher, ExecutionStore, InMemoryExecutionStore,
-    ProblemDetails, ProcessRunner, RandomGenerator, RuntimeInfo, RuntimePolicy, Scheduler,
-    SecretResolver, ServiceInvoker, StandardErrorType, SystemClock, UuidGenerator, WorkflowError,
+    Clock, CompiledExpression, ErrorKind, EventConsumer, EventPublisher, ExecutionStore,
+    InMemoryExecutionStore, ProblemDetails, ProcessRunner, RandomGenerator, RuntimeInfo,
+    RuntimePolicy, Scheduler, SecretResolver, ServiceInvoker, StandardErrorType, SystemClock,
+    UuidGenerator, WorkflowError,
 };
 use serverless_workflow_core::models::workflow::WorkflowDefinition;
 use tokio::sync::{oneshot, Notify};
@@ -20,10 +21,13 @@ use crate::service::{
     A2aInvoker, AsyncApiInvoker, GrpcInvoker, HttpServiceInvoker, McpInvoker, OpenApiInvoker,
 };
 use crate::service::{FunctionInvoker, NoopProcessRunner, NoopServiceInvoker};
+use ows_runtime_dsl::Workflow;
 
 /// Shared services backing all executions of a [`Runtime`].
 pub struct RuntimeInner {
     pub expression: Arc<dyn ows_runtime_core::ExpressionEngine>,
+    /// Compiled expression cache shared by executions of the runtime.
+    pub expression_cache: std::sync::Mutex<HashMap<String, CompiledExpression>>,
     pub clock: Arc<dyn Clock>,
     pub uuid: Arc<dyn UuidGenerator>,
     pub random: Arc<dyn RandomGenerator>,
@@ -77,6 +81,20 @@ impl RuntimeInner {
     /// The lifecycle event emitter.
     pub fn lifecycle(&self) -> ows_runtime_observability::LifecycleEmitter {
         ows_runtime_observability::LifecycleEmitter::new(self.publisher.clone())
+    }
+
+    /// Compiles an expression once per runtime and returns a reusable handle.
+    pub fn compiled_expression(
+        &self,
+        source: &str,
+    ) -> Result<CompiledExpression, ows_runtime_core::ExpressionError> {
+        let mut cache = self.expression_cache.lock().unwrap();
+        if let Some(compiled) = cache.get(source) {
+            return Ok(compiled.clone());
+        }
+        let compiled = self.expression.compile(source)?;
+        cache.insert(source.to_string(), compiled.clone());
+        Ok(compiled)
     }
 
     /// Validates a value against a JSON schema document.
@@ -176,7 +194,22 @@ pub struct Runtime {
     pub(crate) inner: Arc<RuntimeInner>,
 }
 
+impl Default for Runtime {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl Runtime {
+    /// Creates a runtime with the safe default configuration.
+    ///
+    /// Use [`Runtime::builder`] when custom services or policies are needed.
+    pub fn new() -> Self {
+        Self::builder()
+            .build()
+            .expect("the default runtime configuration is valid")
+    }
+
     /// Starts building a new runtime.
     pub fn builder() -> RuntimeBuilder {
         RuntimeBuilder::new()
@@ -184,6 +217,33 @@ impl Runtime {
 
     /// Compiles and validates a workflow definition.
     pub fn compile(&self, def: &WorkflowDefinition) -> Result<CompiledWorkflow, WorkflowError> {
+        let report = ows_runtime_dsl::validate(def);
+        if !report.is_valid() {
+            let detail = report
+                .issues
+                .iter()
+                .map(|issue| match &issue.instance {
+                    Some(instance) => format!("{} at {}: {}", issue.code, instance, issue.message),
+                    None => format!("{}: {}", issue.code, issue.message),
+                })
+                .collect::<Vec<_>>()
+                .join("; ");
+            let mut error = crate::error::validation_error(detail);
+            error.problem.instance = report
+                .issues
+                .first()
+                .and_then(|issue| issue.instance.clone());
+            return Err(error);
+        }
+        if let Some(evaluate) = &def.evaluate {
+            if !evaluate.language.is_empty() && evaluate.language != "jq" {
+                return Err(crate::error::semantic_error(format!(
+                    "runtime expression language `{}` is not supported by this runtime",
+                    evaluate.language
+                )));
+            }
+        }
+        validate_expressions(self, def)?;
         compile::compile(def)
     }
 
@@ -297,11 +357,15 @@ impl Runtime {
     }
 
     /// Runs a compiled workflow to completion and returns its output.
-    pub async fn run(
+    pub async fn run<W>(
         &self,
-        workflow: Arc<CompiledWorkflow>,
+        workflow: W,
         input: serde_json::Value,
-    ) -> Result<serde_json::Value, WorkflowError> {
+    ) -> Result<serde_json::Value, WorkflowError>
+    where
+        W: WorkflowInput,
+    {
+        let workflow = workflow.into_compiled(self)?;
         self.execute(workflow, input).await?.wait().await
     }
 
@@ -370,6 +434,89 @@ impl Runtime {
     /// Used by conformance and integration tests to assert task ordering.
     pub fn take_task_order(&self) -> Vec<String> {
         self.inner.take_task_order()
+    }
+}
+
+/// Compiles all expression-bearing definition fields before execution. This
+/// makes expression failures compilation/validation failures and populates the
+/// runtime cache used by the execution loop.
+fn validate_expressions(runtime: &Runtime, def: &WorkflowDefinition) -> Result<(), WorkflowError> {
+    let value = serde_json::to_value(def).map_err(|error| {
+        crate::error::validation_error(format!("cannot inspect workflow expressions: {error}"))
+    })?;
+    let mut path = String::new();
+    validate_expression_value(runtime, &value, &mut path, None)
+}
+
+fn validate_expression_value(
+    runtime: &Runtime,
+    value: &serde_json::Value,
+    path: &mut String,
+    parent_key: Option<&str>,
+) -> Result<(), WorkflowError> {
+    match value {
+        serde_json::Value::String(source) => {
+            let expression_field = matches!(
+                parent_key,
+                Some(
+                    "if" | "when" | "while" | "in" | "as" | "from" | "exceptWhen" | "until" | "set"
+                )
+            );
+            if expression_field || source.contains("${") {
+                runtime.inner.compiled_expression(source).map_err(|error| {
+                    WorkflowError::new(
+                        ErrorKind::Expression,
+                        ProblemDetails::standard(StandardErrorType::Expression)
+                            .with_detail(error.to_string())
+                            .with_instance(path.clone()),
+                    )
+                })?;
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for (index, item) in items.iter().enumerate() {
+                let previous = path.len();
+                path.push('/');
+                path.push_str(&index.to_string());
+                validate_expression_value(runtime, item, path, None)?;
+                path.truncate(previous);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for (key, item) in map {
+                let previous = path.len();
+                path.push('/');
+                path.push_str(&key.replace('~', "~0").replace('/', "~1"));
+                validate_expression_value(runtime, item, path, Some(key))?;
+                path.truncate(previous);
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// A workflow source accepted by [`Runtime::run`].
+pub trait WorkflowInput {
+    /// Resolves the source into executable IR, validating definitions first.
+    fn into_compiled(self, runtime: &Runtime) -> Result<Arc<CompiledWorkflow>, WorkflowError>;
+}
+
+impl WorkflowInput for Arc<CompiledWorkflow> {
+    fn into_compiled(self, _runtime: &Runtime) -> Result<Arc<CompiledWorkflow>, WorkflowError> {
+        Ok(self)
+    }
+}
+
+impl WorkflowInput for &Workflow {
+    fn into_compiled(self, runtime: &Runtime) -> Result<Arc<CompiledWorkflow>, WorkflowError> {
+        runtime.register_definition(self.definition())
+    }
+}
+
+impl WorkflowInput for &WorkflowDefinition {
+    fn into_compiled(self, runtime: &Runtime) -> Result<Arc<CompiledWorkflow>, WorkflowError> {
+        runtime.register_definition(self)
     }
 }
 
@@ -613,6 +760,7 @@ impl RuntimeBuilder {
             expression: self
                 .expression
                 .unwrap_or_else(|| Arc::new(ows_runtime_expressions::JqEngine::new())),
+            expression_cache: std::sync::Mutex::new(HashMap::new()),
             clock: self.clock.unwrap_or_else(|| Arc::new(SystemClock::new())),
             uuid: self
                 .uuid
@@ -747,6 +895,46 @@ do:
         let wf = rt.register_definition(&def).unwrap();
         let out = rt.run(wf, serde_json::Value::Null).await.unwrap();
         assert_eq!(out["x"], 1);
+    }
+
+    #[tokio::test]
+    async fn ergonomic_workflow_api_validates_before_execution() {
+        let runtime = Runtime::new();
+        let workflow = Workflow::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: n, name: w, version: '0.1.0' }
+do:
+  - set: { set: { value: '${ .value + 1 }' } }
+"#,
+        )
+        .unwrap();
+        let output = runtime
+            .run(&workflow, serde_json::json!({"value": 1}))
+            .await
+            .unwrap();
+        assert_eq!(output["value"], 2);
+        runtime.take_task_order();
+
+        let invalid = Workflow::from_yaml(
+            r#"
+document: { dsl: '1.0.3', namespace: n, name: bad, version: '0.1.0' }
+do:
+  - broken: { set: { value: '${ .value + }' } }
+"#,
+        )
+        .unwrap();
+        let error = runtime
+            .run(&invalid, serde_json::Value::Null)
+            .await
+            .unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Expression);
+        assert!(error
+            .problem
+            .instance
+            .as_deref()
+            .unwrap_or_default()
+            .contains("set"));
+        assert!(runtime.take_task_order().is_empty());
     }
 
     #[test]

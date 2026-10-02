@@ -1,0 +1,16 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-switch
+  version: '0.1.0'
+do:
+  - choose:
+      switch:
+        - ready:
+            when: '.ready == true'
+            then: result
+        - fallback:
+            then: result
+  - result:
+      set:
+        selected: '${ . }'

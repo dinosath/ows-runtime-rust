@@ -1,0 +1,14 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-emit
+  version: '0.1.0'
+do:
+  - publish:
+      emit:
+        event:
+          with:
+            source: https://open-workflow-specification.org/examples
+            type: examples.node-types.emit
+            data:
+              message: hello from emit

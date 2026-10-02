@@ -4,6 +4,7 @@
 //! `ows-runtime` and `ows-runtime-dsl` crates (and the conformance module in
 //! `ows_runtime_cli::conformance`).
 
+use std::io::{self, Read, Write};
 use std::path::PathBuf;
 
 use clap::{Parser, Subcommand};
@@ -31,13 +32,31 @@ enum Command {
         /// The workflow definition file (YAML or JSON).
         file: PathBuf,
     },
-    /// Runs a workflow definition to completion.
+    /// Runs a workflow definition to completion. If it declares input and
+    /// --input is omitted, JSON/YAML input is read interactively from stdin.
     Run {
         /// The workflow definition file (YAML or JSON).
         file: PathBuf,
-        /// The workflow input as a YAML/JSON file.
+        /// The workflow input as a YAML/JSON file; omit it to be prompted when
+        /// the workflow declares input.
         #[arg(long)]
         input: Option<PathBuf>,
+        /// Novel URL to pass as `novel_url` workflow input.
+        #[arg(long = "url", visible_alias = "novel-url", conflicts_with = "input")]
+        novel_url: Option<String>,
+        /// First chapter to pass as `chapter_from` workflow input.
+        #[arg(
+            long = "from",
+            visible_alias = "chapter-from",
+            conflicts_with = "input"
+        )]
+        chapter_from: Option<u64>,
+        /// Last chapter to pass as `chapter_to` workflow input.
+        #[arg(long = "to", visible_alias = "chapter-to", conflicts_with = "input")]
+        chapter_to: Option<u64>,
+        /// Save the final workflow output to this file instead of stdout.
+        #[arg(long)]
+        output: Option<PathBuf>,
         /// Allow outbound network access (deny-by-default).
         #[arg(long)]
         allow_network: bool,
@@ -126,6 +145,10 @@ async fn main() {
         Command::Run {
             file,
             input,
+            novel_url,
+            chapter_from,
+            chapter_to,
+            output: output_path,
             allow_network,
             allow_scripts,
             allow_containers,
@@ -133,6 +156,7 @@ async fn main() {
             catalogs,
             catalog_files,
         } => {
+            init_run_logging();
             let def = ows_runtime_dsl::from_file(&file).unwrap_or_else(|e| {
                 eprintln!("error: {e}");
                 std::process::exit(1);
@@ -208,16 +232,49 @@ async fn main() {
                 .register_definition_resolved(&def)
                 .await
                 .expect("compile");
-            let input = match input {
-                Some(path) => {
+            if (chapter_from.is_some() || chapter_to.is_some()) && novel_url.is_none() {
+                eprintln!("error: --from and --to require --url");
+                std::process::exit(1);
+            }
+            let cli_input = novel_url.map(|url| {
+                let mut value = serde_json::Map::new();
+                value.insert("novel_url".to_string(), serde_json::Value::String(url));
+                if let Some(chapter_from) = chapter_from {
+                    value.insert("chapter_from".to_string(), serde_json::json!(chapter_from));
+                }
+                if let Some(chapter_to) = chapter_to {
+                    value.insert("chapter_to".to_string(), serde_json::json!(chapter_to));
+                }
+                serde_json::Value::Object(value)
+            });
+            let input = match (input, cli_input) {
+                (Some(_), Some(_)) => {
+                    eprintln!("error: --input cannot be combined with --url, --from, or --to");
+                    std::process::exit(1);
+                }
+                (Some(path), None) => {
                     let text = std::fs::read_to_string(&path).expect("read input");
                     serde_yaml::from_str(&text).expect("parse input as YAML")
                 }
-                None => serde_json::Value::Null,
+                (None, Some(value)) => value,
+                (None, None) if def.input.is_some() => prompt_for_input(&def),
+                (None, None) => serde_json::Value::Null,
             };
             match runtime.run(wf, input).await {
-                Ok(output) => {
-                    println!("{}", serde_yaml::to_string(&output).unwrap());
+                Ok(result) => {
+                    let rendered = serde_yaml::to_string(&result).unwrap_or_else(|error| {
+                        eprintln!("error: serialize workflow output: {error}");
+                        std::process::exit(1);
+                    });
+                    if let Some(path) = output_path {
+                        std::fs::write(&path, rendered).unwrap_or_else(|error| {
+                            eprintln!("error: write workflow output `{}`: {error}", path.display());
+                            std::process::exit(1);
+                        });
+                        eprintln!("workflow output written to {}", path.display());
+                    } else {
+                        print!("{rendered}");
+                    }
                 }
                 Err(err) => {
                     eprintln!(
@@ -250,6 +307,50 @@ async fn main() {
             }
         }
     }
+}
+
+fn init_run_logging() {
+    let filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive("ows_runtime=debug".parse().expect("valid log directive"));
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(filter)
+        .with_writer(std::io::stderr)
+        .with_target(true)
+        .try_init();
+}
+
+/// Prompts for a workflow's declared input when `run` is used interactively.
+///
+/// JSON is valid YAML, so accepting YAML here also accepts structured JSON.
+/// Reading until EOF keeps the prompt useful for nested objects and arrays;
+/// finish interactive input with Ctrl-D.
+fn prompt_for_input(
+    def: &ows_runtime_dsl::models::workflow::WorkflowDefinition,
+) -> serde_json::Value {
+    eprintln!("This workflow declares input.");
+    if let Some(schema) = def.input.as_ref().and_then(|input| input.schema.as_ref()) {
+        if let Ok(schema) = serde_yaml::to_string(schema) {
+            eprintln!("Input schema:\n{schema}");
+        }
+    }
+    eprintln!("Enter workflow input as JSON or YAML, then press Ctrl-D:");
+    io::stderr().flush().expect("flush input prompt");
+
+    let mut text = String::new();
+    io::stdin()
+        .read_to_string(&mut text)
+        .unwrap_or_else(|error| {
+            eprintln!("error: read workflow input: {error}");
+            std::process::exit(1);
+        });
+    if text.trim().is_empty() {
+        eprintln!("error: workflow input cannot be empty");
+        std::process::exit(1);
+    }
+    serde_yaml::from_str(&text).unwrap_or_else(|error| {
+        eprintln!("error: parse workflow input as JSON/YAML: {error}");
+        std::process::exit(1);
+    })
 }
 
 fn print_human(report: &ows_runtime_cli::conformance::ConformanceReport) {

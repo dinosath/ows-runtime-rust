@@ -8,7 +8,7 @@
 //! The engine implements [`ows_runtime_core::ExpressionEngine`] and supports:
 //! literals, variables, field access, array/object construction, pipes, binary
 //! operators, comparisons, string interpolation, `if/then/else`, and a set of
-//! `jq` functions (`map`, `select`, `join`, `length`, ...).
+//! `jq` functions (`map`, `select`, `join`, `length`, `reverse`, `fromjson`, ...).
 #![allow(clippy::result_large_err)]
 
 pub mod ast;
@@ -197,5 +197,21 @@ mod tests {
     fn missing_field_is_null() {
         let input = json!({"a": 1});
         assert_eq!(eval_str(".z.z", input).unwrap(), json!(null));
+    }
+
+    #[test]
+    fn fromjson_decodes_json_string() {
+        assert_eq!(
+            eval_str("fromjson", json!(r#"{"title":"example","count":2}"#)).unwrap(),
+            json!({"title": "example", "count": 2})
+        );
+    }
+
+    #[test]
+    fn reverse_reverses_arrays() {
+        assert_eq!(
+            eval_str("reverse", json!([1, 2, 3])).unwrap(),
+            json!([3, 2, 1])
+        );
     }
 }

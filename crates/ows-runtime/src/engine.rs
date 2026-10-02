@@ -777,8 +777,7 @@ pub(crate) fn eval_expr(
     task: Option<&CompiledTask>,
 ) -> Result<Value, WorkflowError> {
     let compiled = inner
-        .expression
-        .compile(source)
+        .compiled_expression(source)
         .map_err(|e| to_expression_error(e, task))?;
     inner
         .expression

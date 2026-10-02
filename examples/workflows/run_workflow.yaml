@@ -1,0 +1,9 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: greet
+  version: '0.1.0'
+do:
+  - buildGreeting:
+      set:
+        greeting: '${ "Hello, \(.name)!" }'

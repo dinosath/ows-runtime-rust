@@ -1,0 +1,16 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-fork
+  version: '0.1.0'
+do:
+  - parallel:
+      fork:
+        compete: false
+        branches:
+          - first:
+              set:
+                branch: first
+          - second:
+              set:
+                branch: second

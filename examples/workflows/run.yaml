@@ -1,0 +1,12 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-run
+  version: '0.1.0'
+do:
+  - command:
+      run:
+        shell:
+          command: echo
+          arguments:
+            - hello from run

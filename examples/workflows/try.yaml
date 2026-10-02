@@ -1,0 +1,22 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-try
+  version: '0.1.0'
+do:
+  - recover:
+      try:
+        - fail:
+            raise:
+              error:
+                type: https://open-workflow-specification.org/spec/1.0.0/errors/runtime
+                title: Expected example failure
+                status: 400
+      catch:
+        errors:
+          with:
+            status: 400
+        do:
+          - handle:
+              set:
+                recovered: true

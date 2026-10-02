@@ -1,0 +1,12 @@
+document:
+  dsl: '1.0.3'
+  namespace: examples
+  name: node-call
+  version: '0.1.0'
+do:
+  - request:
+      call: http
+      with:
+        method: get
+        endpoint: https://httpbin.org/get?example=node-call
+        output: content
